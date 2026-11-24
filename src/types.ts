@@ -1,5 +1,7 @@
 import type {CubeMoveNotation} from './cubeMoves';
 
+export type PuzzleType = 'classic' | 'mirror';
+
 export type MachineState =
   | 'STANDBY'
   | 'APPROACHING'
@@ -11,7 +13,8 @@ export type MachineState =
   | 'CELEBRATING'
   | 'LOWERING'
   | 'RELEASING'
-  | 'RETURNING';
+  | 'RETURNING'
+  | 'SWAPPING';
 
 export type ArmLedMode =
   | 'idle'
@@ -40,6 +43,43 @@ export interface Vec3 {
   z: number;
 }
 
+/**
+ * Exact outer surface measurements of one face's gripped 3-cubie strip and full 9-cubie face
+ * in cube-local space (relative to core `(0, 0, 0)`).
+ */
+export interface FaceStripMetrics {
+  /** Distance from core to outermost point of the 3-cubie gripped strip along face normal (> 0). */
+  stripNormal: number;
+  /** Distance from core to outermost point of all 9 cubies on this face along face normal (> 0). */
+  faceNormal: number;
+  /** Positive-side extent along the jaw-sliding axis of the gripped strip (> 0). */
+  jawPos: number;
+  /** Negative-side extent (as positive distance) along the jaw-sliding axis of the gripped strip (> 0). */
+  jawNeg: number;
+}
+
+export interface PuzzleBoundsSnapshot {
+  puzzleType: PuzzleType;
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  minZ: number;
+  maxZ: number;
+  /** Maximum 2D diagonal extent around core (0, 0, 0) for spin/unwind clearance scaling. */
+  maxSpinRadius: number;
+  faces: {
+    L: FaceStripMetrics;
+    R: FaceStripMetrics;
+    U: FaceStripMetrics;
+    D: FaceStripMetrics;
+    F: FaceStripMetrics;
+    B: FaceStripMetrics;
+    /** +Y face strip along X (z=0), used when Right arm stabilizes middle slice during F/B. */
+    U_FB: FaceStripMetrics;
+  };
+}
+
 export interface ArmJointAngles {
   /** Turret yaw rotation around Y axis (radians). 0 points toward cube along ±X. */
   baseYaw: number;
@@ -53,6 +93,10 @@ export interface ArmJointAngles {
   wristRoll: number;
   /** Normalized jaw opening: 0 = exact clamp contact on cube, 1 = fully open standby. */
   jawOpen: number;
+  /** Optional live front (+Z) jaw clamp distance from wrist center when jawOpen = 0 (defaults to CUBE_OUTER_HALF). */
+  frontJawExtent?: number;
+  /** Optional live rear (-Z) jaw clamp distance from wrist center when jawOpen = 0 (defaults to CUBE_OUTER_HALF). */
+  rearJawExtent?: number;
 }
 
 export type ScrambleButtonMode = 'start' | 'stop' | 'busy';
@@ -73,6 +117,7 @@ export interface SolveProgress {
 
 export interface MachineSnapshot {
   state: MachineState;
+  puzzleType: PuzzleType;
   statusLabel: string;
   ledMode: ArmLedMode;
   isBusy: boolean;
@@ -89,6 +134,7 @@ export interface MachineSnapshot {
   scrambleButtonDisabled: boolean;
   solveButtonLabel: string;
   solveButtonDisabled: boolean;
+  puzzleSwitcherDisabled: boolean;
   speedMultiplier: MotionSpeed;
   phaseProgress: number;
   scrambleProgress: ScrambleProgress | null;
@@ -108,11 +154,13 @@ export const MACHINE_STATUS_LABELS: Record<MachineState, string> = {
   LOWERING: 'GRIPPING — LOWERING',
   RELEASING: 'RELEASING',
   RETURNING: 'RETURNING',
+  SWAPPING: 'SWAPPING PUZZLE',
 };
 
 export function getArmLedMode(state: MachineState): ArmLedMode {
   switch (state) {
     case 'STANDBY':
+    case 'SWAPPING':
       return 'idle';
     case 'APPROACHING':
     case 'RELEASING':

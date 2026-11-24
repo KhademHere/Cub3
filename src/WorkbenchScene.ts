@@ -10,7 +10,7 @@ import {createLabMaterials, type LabMaterialLibrary} from './materials';
 import {RoboticArm} from './RoboticArm';
 import {RubiksCube} from './RubiksCube';
 import {ServoAudio} from './ServoAudio';
-import type {MachineSnapshot, MotionSpeed} from './types';
+import type {MachineSnapshot, MotionSpeed, PuzzleType} from './types';
 
 const DEFAULT_CAMERA_POS = new THREE.Vector3(0, 1.66, 0.38);
 const DEFAULT_CAMERA_TARGET = new THREE.Vector3(
@@ -52,6 +52,7 @@ export class WorkbenchScene extends xb.Script {
   private xrActionButton: xb.UIButton | null = null;
   private xrScrambleButton: xb.UIButton | null = null;
   private xrSolveButton: xb.UIButton | null = null;
+  private xrPuzzleButton: xb.UIButton | null = null;
   private unsubscribeController: (() => void) | null = null;
   private onXrVisibilityChange?: (inXr: boolean) => void;
 
@@ -143,6 +144,13 @@ export class WorkbenchScene extends xb.Script {
       if (this.xrSolveButton) {
         this.xrSolveButton.label = snapshot.solveButtonLabel.replace(/✓/g, 'OK');
         this.xrSolveButton.disabled = snapshot.solveButtonDisabled;
+      }
+      if (this.xrPuzzleButton) {
+        this.xrPuzzleButton.label =
+          snapshot.puzzleType === 'mirror'
+            ? 'Switch: Classic 3x3'
+            : 'Switch: Mirror Cube';
+        this.xrPuzzleButton.disabled = snapshot.puzzleSwitcherDisabled;
       }
     });
 
@@ -438,6 +446,15 @@ export class WorkbenchScene extends xb.Script {
         this.triggerAutoSolve();
       },
     });
+    this.xrPuzzleButton = new xb.UIButton({
+      label: 'Switch: Mirror Cube',
+      style: {width: '100%'},
+      onClick: () => {
+        const next: PuzzleType =
+          this.controller?.getPuzzleType() === 'mirror' ? 'classic' : 'mirror';
+        this.requestPuzzleSwitch(next);
+      },
+    });
     this.xrCard = new xb.UICard({
       size: {width: 0.64, height: 'auto'},
       manipulation: true,
@@ -461,6 +478,7 @@ export class WorkbenchScene extends xb.Script {
             this.xrSolveButton,
           ],
         }),
+        this.xrPuzzleButton,
       ],
     });
     // Positioned neatly at the front-right corner of the workbench for XR headset reach
@@ -524,6 +542,10 @@ export class WorkbenchScene extends xb.Script {
 
   triggerAutoSolve(): boolean {
     return this.controller?.triggerAutoSolve() ?? false;
+  }
+
+  requestPuzzleSwitch(target: PuzzleType): boolean {
+    return this.controller?.requestPuzzleSwitch(target) ?? false;
   }
 
   setSpeedMultiplier(speed: MotionSpeed): void {

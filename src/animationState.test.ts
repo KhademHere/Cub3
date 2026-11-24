@@ -7,6 +7,7 @@ import {getMoveSpec, type CubeMoveNotation} from './cubeMoves';
 import {LAB_DIMENSIONS, computeForwardKinematics} from './kinematics';
 import type {LabMaterialLibrary} from './materials';
 import {RoboticArm} from './RoboticArm';
+import {RubiksCube} from './RubiksCube';
 import type {MachineState} from './types';
 
 function advanceBy(choreo: RoboticsChoreography, seconds: number) {
@@ -583,8 +584,22 @@ interface OBB3 {
 
 function makeMockMaterials(): LabMaterialLibrary {
   const mat = new THREE.MeshBasicMaterial();
+  const nestedProxy = new Proxy(
+    {},
+    {
+      get: () => mat,
+    },
+  );
   return new Proxy({} as LabMaterialLibrary, {
-    get: () => mat,
+    get: (_target, prop) => {
+      if (prop === 'cubeTiles' || prop === 'mirrorCubeTiles') {
+        return nestedProxy;
+      }
+      if (prop === 'dispose') {
+        return () => mat.dispose();
+      }
+      return mat;
+    },
   });
 }
 
@@ -949,6 +964,264 @@ test('3D mesh SAT collision audit: zero arm-to-arm overlap, zero cube clipping, 
   leftArm.dispose();
   rightArm.dispose();
 });
+
+test('Puzzle Switcher swaps cleanly from STANDBY and auto-puts-down from HOLDING while locking buttons during transitions', () => {
+  const choreo = new RoboticsChoreography();
+  const seenStates: MachineState[] = [];
+  choreo.subscribe((snap) => {
+    if (seenStates[seenStates.length - 1] !== snap.state) {
+      seenStates.push(snap.state);
+    }
+  });
+
+  // 1. Switch Classic -> Mirror directly from STANDBY
+  assert.equal(choreo.getPuzzleType(), 'classic');
+  assert.equal(choreo.getSnapshot().puzzleSwitcherDisabled, false);
+  assert.equal(choreo.requestPuzzleSwitch('classic'), false);
+  assert.equal(choreo.requestPuzzleSwitch('mirror'), true);
+  assert.equal(choreo.getState(), 'SWAPPING');
+  assert.equal(choreo.getSnapshot().puzzleSwitcherDisabled, true);
+  assert.equal(choreo.getSnapshot().primaryButtonDisabled, true);
+  assert.equal(choreo.requestPuzzleSwitch('classic'), false);
+
+  let committedTarget: string | null = null;
+  let minScale = 1;
+  let steps = 0;
+  while (choreo.getState() !== 'STANDBY' && steps < 400) {
+    const f = choreo.step(0.02);
+    if (f.commitPuzzleSwap) committedTarget = f.commitPuzzleSwap;
+    if (f.cubeScale < minScale) minScale = f.cubeScale;
+    steps += 1;
+  }
+  assert.equal(choreo.getState(), 'STANDBY');
+  assert.equal(committedTarget, 'mirror');
+  assert.equal(choreo.getPuzzleType(), 'mirror');
+  assert.ok(minScale < 0.2, `Expected cube to scale down smoothly mid-swap, minScale=${minScale}`);
+  assert.equal(choreo.getSnapshot().statusLabel, 'STANDBY • MIRROR CUBE');
+  assert.equal(choreo.getSnapshot().puzzleSwitcherDisabled, false);
+
+  // 2. Pick Up Mirror Cube into HOLDING, then request switch back to Classic -> must Put Down first!
+  assert.equal(choreo.triggerPrimaryAction(), true);
+  while (choreo.getState() !== 'HOLDING') {
+    choreo.step(0.02);
+  }
+  assert.equal(choreo.getSnapshot().statusLabel, 'HOLDING — READY • MIRROR');
+  assert.equal(choreo.requestPuzzleSwitch('classic'), true);
+  assert.equal(choreo.getState(), 'LOWERING');
+  assert.equal(choreo.getSnapshot().puzzleSwitcherDisabled, true);
+
+  committedTarget = null;
+  steps = 0;
+  while (choreo.getState() !== 'STANDBY' && steps < 800) {
+    const f = choreo.step(0.02);
+    if (f.commitPuzzleSwap) committedTarget = f.commitPuzzleSwap;
+    steps += 1;
+  }
+  assert.equal(choreo.getState(), 'STANDBY');
+  assert.equal(committedTarget, 'classic');
+  assert.equal(choreo.getPuzzleType(), 'classic');
+  assert.equal(choreo.getSnapshot().statusLabel, 'STANDBY');
+
+  assert.deepEqual(seenStates, [
+    'STANDBY',
+    'SWAPPING',
+    'STANDBY',
+    'APPROACHING',
+    'GRIPPING',
+    'LIFTING',
+    'HOLDING',
+    'LOWERING',
+    'RELEASING',
+    'RETURNING',
+    'SWAPPING',
+    'STANDBY',
+  ]);
+});
+
+test('Mirror Cube 3D mesh SAT collision audit: zero arm-to-arm overlap, zero cubie clipping, and flush tabletop clearance across 22-move scramble + Auto-Solve', () => {
+  const materials = makeMockMaterials();
+  const leftArm = new RoboticArm('left', materials);
+  const rightArm = new RoboticArm('right', materials);
+  const cube = new RubiksCube(materials, 'mirror');
+  const leftTracked = collectArmMeshes(leftArm);
+  const rightTracked = collectArmMeshes(rightArm);
+
+  const choreo = new RoboticsChoreography();
+  choreo.syncPuzzleBounds(cube.getBoundsSnapshot());
+
+  // 22-move scramble covering all 12 faces + deep asymmetric shape-shifting combinations
+  const mirrorScramble: CubeMoveNotation[] = [
+    'R', 'U', 'F', 'L', "D'", 'B',
+    "R'", "F'", 'U', 'L', 'D', "B'",
+    'R', 'F', "L'", "U'", 'B', 'D',
+    "R'", 'U', 'F', "L'",
+  ];
+
+  let activeTurnId = -1;
+  let worstArmOverlap = 0;
+  let worstArmDetail = '';
+  let worstCubeOverlap = 0;
+  let worstCubeDetail = '';
+  let lowestArmY = Infinity;
+  let lowestArmDetail = '';
+  let framesChecked = 0;
+
+  const cubieHalf = new THREE.Vector3();
+  const cubieCenter = new THREE.Vector3();
+
+  const applyAndAudit = (frame: ReturnType<RoboticsChoreography['evaluateFrame']>) => {
+    framesChecked += 1;
+
+    // Mirror exact AnimationController lockstep execution
+    const recordHistory = frame.committedMovesRecordHistory;
+    if (frame.committedMoves.length > 0) {
+      for (const completedMove of frame.committedMoves) {
+        if (activeTurnId === -1) {
+          cube.applyMoveInstant(completedMove, recordHistory);
+        } else {
+          cube.commitActiveMove(recordHistory);
+          activeTurnId = -1;
+        }
+      }
+      choreo.syncPuzzleBounds(cube.getBoundsSnapshot());
+    }
+    if (frame.clearHistoryOnFinish) {
+      cube.clearMoveHistory();
+    }
+    if (frame.activeFaceTurn) {
+      if (activeTurnId !== frame.activeFaceTurn.turnId) {
+        activeTurnId = frame.activeFaceTurn.turnId;
+        cube.beginMove(frame.activeFaceTurn.move);
+      }
+      cube.setActiveMoveProgress(frame.activeFaceTurn.easedProgress);
+    }
+
+    leftArm.applyJointAngles(frame.leftAngles);
+    rightArm.applyJointAngles(frame.rightAngles);
+    cube.position.set(frame.cubePosition.x, frame.cubePosition.y, frame.cubePosition.z);
+    cube.rotation.set(frame.cubePitch, frame.cubeYaw, 0);
+    cube.scale.setScalar(frame.cubeScale);
+
+    leftArm.updateMatrixWorld(true);
+    rightArm.updateMatrixWorld(true);
+    cube.updateMatrixWorld(true);
+
+    const leftOBBs = leftTracked.map((t) => ({t, obb: buildWorldOBB(t)}));
+    const rightOBBs = rightTracked.map((t) => ({t, obb: buildWorldOBB(t)}));
+    const contextTag = `${frame.snapshot.state} (${frame.snapshot.statusLabel})`;
+
+    // 1. Strict tabletop clearance for all moving arm parts
+    for (const group of [leftOBBs, rightOBBs]) {
+      for (const {t, obb} of group) {
+        if (!t.checkTabletop) continue;
+        const minY = obbMinY(obb);
+        if (minY < lowestArmY) {
+          lowestArmY = minY;
+          lowestArmDetail = `${obb.label} at ${contextTag}`;
+        }
+      }
+    }
+
+    // 2. Zero arm-to-arm 3D mesh overlap
+    for (const l of leftOBBs) {
+      for (const r of rightOBBs) {
+        const overlap = obbOverlapDepth(l.obb, r.obb);
+        if (overlap > worstArmOverlap) {
+          worstArmOverlap = overlap;
+          worstArmDetail = `${l.obb.label} vs ${r.obb.label} (${(overlap * 1000).toFixed(2)}mm) at ${contextTag}`;
+        }
+      }
+    }
+
+    // 3. Build exact live OBB for all 27 individual Mirror Cube cubies (shrunk by 0.4mm flush margin)
+    const cubieOBBs: OBB3[] = [];
+    for (const unit of cube.cubies) {
+      cubieCenter.addVectors(unit.localMin, unit.localMax).multiplyScalar(0.5);
+      cubieHalf.subVectors(unit.localMax, unit.localMin).multiplyScalar(0.5);
+      cubieOBBs.push(
+        buildBoxOBB(unit.group.name, unit.group.matrixWorld, cubieCenter, [
+          Math.max(0.001, cubieHalf.x - 0.0004),
+          Math.max(0.001, cubieHalf.y - 0.0004),
+          Math.max(0.001, cubieHalf.z - 0.0004),
+        ]),
+      );
+    }
+
+    // Check every arm mesh OBB against every live rotated Mirror Cube cubie OBB!
+    for (const item of [...leftOBBs, ...rightOBBs]) {
+      for (const cOBB of cubieOBBs) {
+        const overlap = obbOverlapDepth(item.obb, cOBB);
+        if (overlap > worstCubeOverlap) {
+          worstCubeOverlap = overlap;
+          worstCubeDetail = `${item.obb.label} vs ${cOBB.label} (${(overlap * 1000).toFixed(2)}mm) at ${contextTag}`;
+        }
+      }
+    }
+  };
+
+  // Verify solved Mirror Cube rests dead-flush on pad in initial STANDBY
+  const initFrame = choreo.evaluateFrame();
+  applyAndAudit(initFrame);
+  const initBounds = cube.getBoundsSnapshot();
+  const bottomWorldY = initFrame.cubePosition.y + initBounds.minY;
+  assert.ok(
+    Math.abs(bottomWorldY - (LAB_DIMENSIONS.TABLE_TOP_Y + LAB_DIMENSIONS.PAD_SURFACE_OFFSET)) < 1e-4,
+    `Solved Mirror Cube bottom should rest flush on pad, got ${bottomWorldY.toFixed(5)}`,
+  );
+
+  // Pick Up + 22-move Mirror Cube Scramble
+  assert.equal(choreo.triggerScramble(mirrorScramble), true);
+  let steps = 0;
+  while (choreo.getState() !== 'HOLDING' && steps < 9000) {
+    applyAndAudit(choreo.step(0.015));
+    steps += 1;
+  }
+  assert.equal(choreo.getState(), 'HOLDING');
+  assert.equal(cube.isSolved(), false);
+
+  // Auto-Solve Mirror Cube completely back to solved metallic cube + Celebration!
+  assert.equal(choreo.triggerAutoSolve(cube.getMoveHistory()), true);
+  steps = 0;
+  while (steps < 9000) {
+    const f = choreo.step(0.015);
+    applyAndAudit(f);
+    steps += 1;
+    if (f.snapshot.state === 'HOLDING' && f.snapshot.isSolvedBadge) break;
+  }
+  assert.equal(choreo.getState(), 'HOLDING');
+  assert.equal(cube.isSolved(), true, 'Mirror Cube must be 100% solved after robotic Auto-Solve');
+
+  // Put Down solved Mirror Cube cleanly onto resting pad
+  assert.equal(choreo.triggerPrimaryAction(), true);
+  steps = 0;
+  while (choreo.getState() !== 'STANDBY' && steps < 1500) {
+    applyAndAudit(choreo.step(0.015));
+    steps += 1;
+  }
+  assert.equal(choreo.getState(), 'STANDBY');
+
+  assert.ok(framesChecked > 4000, `Expected dense Mirror Cube audit, checked ${framesChecked} frames`);
+  assert.equal(
+    worstArmOverlap,
+    0,
+    `Mirror Cube arm-to-arm 3D mesh overlap: ${worstArmDetail}`,
+  );
+  assert.equal(
+    worstCubeOverlap,
+    0,
+    `Mirror Cube arm-to-cubie 3D mesh clipping: ${worstCubeDetail}`,
+  );
+  assert.ok(
+    lowestArmY > LAB_DIMENSIONS.TABLE_TOP_Y + 0.03,
+    `Mirror Cube arm dipped too close to tabletop: minY=${lowestArmY.toFixed(4)}m (${lowestArmDetail})`,
+  );
+
+  cube.dispose();
+  leftArm.dispose();
+  rightArm.dispose();
+  materials.dispose();
+});
+
 
 
 

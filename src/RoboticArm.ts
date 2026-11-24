@@ -4,7 +4,7 @@ import {
   LAB_DIMENSIONS,
   clamp01,
   getArmBasePosition,
-  getJawInnerSeparation,
+  getJawHalfPosition,
 } from './kinematics';
 import type {LabMaterialLibrary} from './materials';
 import type {ArmJointAngles, ArmLedMode, ArmSide} from './types';
@@ -110,7 +110,8 @@ export class RoboticArm extends THREE.Group {
       0,
     );
     this.elbowPivot.add(this.wristPitchPivot);
-    this.buildServoDrum(this.wristPitchPivot, 0.032, 0.072, materials);
+    // Compact 27mm radius keeps wrist servo strictly inside Mirror Cube's 30.1mm middle-slice half-width
+    this.buildServoDrum(this.wristPitchPivot, 0.027, 0.068, materials);
 
     // 6. ROTATING WRIST ACTUATOR (X-axis roll for future cube face twisting)
     this.wristRollPivot = new THREE.Group();
@@ -338,9 +339,9 @@ export class RoboticArm extends THREE.Group {
     const s = this.inwardSign;
     const Lg = LAB_DIMENSIONS.GRIPPER_REACH;
 
-    // Rotating cylindrical harmonic-drive wrist actuator (oriented along X axis)
+    // Rotating cylindrical harmonic-drive wrist actuator (radius <= 28mm < 30.1mm Mirror Cube M/2!)
     const wristLen = 0.052;
-    const wristGeo = this.trackGeo(new THREE.CylinderGeometry(0.029, 0.032, wristLen, 24));
+    const wristGeo = this.trackGeo(new THREE.CylinderGeometry(0.0245, 0.0265, wristLen, 24));
     this.addMesh(
       this.wristRollPivot,
       wristGeo,
@@ -350,7 +351,7 @@ export class RoboticArm extends THREE.Group {
     );
 
     // Silver machined flange ring on wrist actuator
-    const wristRingGeo = this.trackGeo(new THREE.CylinderGeometry(0.0335, 0.0335, 0.01, 24));
+    const wristRingGeo = this.trackGeo(new THREE.CylinderGeometry(0.028, 0.028, 0.01, 24));
     this.addMesh(
       this.wristRollPivot,
       wristRingGeo,
@@ -360,7 +361,7 @@ export class RoboticArm extends THREE.Group {
     );
 
     // Glowing LED status band around the rotating wrist
-    const wristLedGeo = this.trackGeo(new THREE.CylinderGeometry(0.0325, 0.0325, 0.006, 24));
+    const wristLedGeo = this.trackGeo(new THREE.CylinderGeometry(0.0275, 0.0275, 0.006, 24));
     this.addMesh(
       this.wristRollPivot,
       wristLedGeo,
@@ -371,10 +372,10 @@ export class RoboticArm extends THREE.Group {
     );
 
     // Parallel Linear Rail Block (crossbar spanning along Z where the 2 jaws slide)
-    // Compact 40mm height keeps the stabilizing gripper strictly within the 70mm center slice!
+    // Compact 40mm height keeps the stabilizing gripper strictly within the 60.2mm Mirror Cube middle slice!
+    // Span accommodates protruding asymmetric Mirror Cube blocks up to 0.144m + open jaw clearance.
     const railX = s * (Lg - 0.022);
-    const railSpanZ =
-      LAB_DIMENSIONS.CUBE_OUTER_SIZE + LAB_DIMENSIONS.JAW_MAX_OPEN_OFFSET * 2 + 0.036;
+    const railSpanZ = 0.396;
 
     const railBodyGeo = this.trackGeo(new THREE.BoxGeometry(0.032, 0.04, railSpanZ));
     this.addMesh(this.wristRollPivot, railBodyGeo, materials.darkAnodized, [railX, 0, 0]);
@@ -478,13 +479,18 @@ export class RoboticArm extends THREE.Group {
   }
 
   /**
-   * Sets the parallel gripper jaw opening (`0` = exact flush clamp on cube,
-   * `1` = fully open standby clearance).
+   * Sets the parallel gripper jaw opening (`0` = exact flush clamp on live puzzle face,
+   * `1` = fully open clearance). Supports independent front (+Z) and rear (-Z) clamp extents
+   * for shape-shifting Mirror Cube blocks.
    */
-  setJawOpen(jawOpen: number): void {
-    const halfSep = getJawInnerSeparation(clamp01(jawOpen)) / 2;
-    this.frontJawCarriage.position.z = halfSep;
-    this.rearJawCarriage.position.z = -halfSep;
+  setJawOpen(
+    jawOpen: number,
+    frontExtent: number = LAB_DIMENSIONS.CUBE_OUTER_HALF,
+    rearExtent: number = LAB_DIMENSIONS.CUBE_OUTER_HALF,
+  ): void {
+    const open = clamp01(jawOpen);
+    this.frontJawCarriage.position.z = getJawHalfPosition(frontExtent, open);
+    this.rearJawCarriage.position.z = -getJawHalfPosition(rearExtent, open);
   }
 
   /**
@@ -506,7 +512,11 @@ export class RoboticArm extends THREE.Group {
     // Wrist roll around the inward X axis (ready for Parts 2 & 3 twists)
     this.wristRollPivot.rotation.x = this.inwardSign * angles.wristRoll;
 
-    this.setJawOpen(angles.jawOpen);
+    this.setJawOpen(
+      angles.jawOpen,
+      angles.frontJawExtent ?? LAB_DIMENSIONS.CUBE_OUTER_HALF,
+      angles.rearJawExtent ?? LAB_DIMENSIONS.CUBE_OUTER_HALF,
+    );
   }
 
   /** Updates the target LED color state (idle cyan / moving amber / gripping emerald / solving / celebrating). */

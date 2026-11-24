@@ -1,9 +1,10 @@
-import type {MachineSnapshot, MotionSpeed} from './types';
+import type {MachineSnapshot, MotionSpeed, PuzzleType} from './types';
 
 export interface ControlHUDCallbacks {
   onPrimaryAction: () => void;
   onScramble: () => void;
   onAutoSolve: () => void;
+  onSelectPuzzle: (puzzle: PuzzleType) => void;
   onSetSpeed: (speed: MotionSpeed) => void;
   onResetCamera: () => void;
   onToggleMute: () => boolean;
@@ -14,6 +15,26 @@ const SPEED_OPTIONS: Array<{value: MotionSpeed; label: string; title: string}> =
   {value: 0.5, label: '0.5x', title: 'Precision Slow-Motion (0.5x)'},
   {value: 1, label: '1x', title: 'Default Smooth (1x)'},
   {value: 2, label: '2x', title: 'Turbo Speed (2x)'},
+];
+
+const PUZZLE_OPTIONS: Array<{
+  value: PuzzleType;
+  label: string;
+  title: string;
+  icon: string;
+}> = [
+  {
+    value: 'classic',
+    label: 'Classic 3x3',
+    title: 'Standard 6-Color 3x3x3 Rubik’s Cube',
+    icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/></svg>`,
+  },
+  {
+    value: 'mirror',
+    label: 'Mirror Cube',
+    title: 'Shape-Shifting Metallic Mirror Cube (Bump Cube)',
+    icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="7" y1="3" x2="7" y2="21"/><line x1="13" y1="3" x2="13" y2="21"/><line x1="3" y1="8" x2="21" y2="8"/><line x1="3" y1="14" x2="21" y2="14"/></svg>`,
+  },
 ];
 
 const ICON_PICKUP = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>`;
@@ -29,6 +50,7 @@ const ICON_SOUND_OFF = `<svg width="16" height="16" viewBox="0 0 24 24" fill="no
 /**
  * Minimal, accessible 2D DOM HUD overlay:
  * - Top-left compact machine status pill with live scramble/solve telemetry
+ * - Top-center segmented Puzzle Switcher (Classic 3x3 | Mirror Cube)
  * - Top-right audio mute/unmute toggle pill
  * - Sleek collapsible floating bottom control bar with Pick Up / Put Down,
  *   Scramble ↔ Stop Scramble, Auto-Solve, live Speed selector (0.5x / 1x / 2x),
@@ -39,6 +61,7 @@ export class ControlHUD {
   private readonly callbacks: ControlHUDCallbacks;
   private readonly statusSwatch: HTMLSpanElement;
   private readonly statusValue: HTMLSpanElement;
+  private readonly puzzleButtons = new Map<PuzzleType, HTMLButtonElement>();
   private readonly primaryBtn: HTMLButtonElement;
   private readonly primaryIcon: HTMLSpanElement;
   private readonly primaryText: HTMLSpanElement;
@@ -89,6 +112,40 @@ export class ControlHUD {
     statusMeta.append(statusTag, this.statusValue);
     statusPill.append(this.statusSwatch, statusMeta);
     statusCluster.append(statusPill);
+
+    // 1b. Top-Center Segmented Puzzle Switcher (Classic 3x3 | Mirror Cube)
+    const puzzleCluster = document.createElement('div');
+    puzzleCluster.className = 'puzzle-cluster';
+
+    const puzzleSegmented = document.createElement('div');
+    puzzleSegmented.className = 'puzzle-segmented';
+    puzzleSegmented.setAttribute('role', 'group');
+    puzzleSegmented.setAttribute('aria-label', 'Active puzzle selector');
+    puzzleSegmented.setAttribute('data-testid', 'puzzle-switcher');
+
+    for (const option of PUZZLE_OPTIONS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'puzzle-btn';
+      btn.title = option.title;
+      btn.setAttribute('data-testid', `puzzle-${option.value}`);
+      btn.setAttribute('aria-pressed', option.value === 'classic' ? 'true' : 'false');
+      if (option.value === 'classic') {
+        btn.classList.add('active');
+      }
+      const iconSpan = document.createElement('span');
+      iconSpan.innerHTML = option.icon;
+      iconSpan.style.display = 'inline-flex';
+      const labelSpan = document.createElement('span');
+      labelSpan.textContent = option.label;
+      btn.append(iconSpan, labelSpan);
+      btn.addEventListener('click', () => {
+        callbacks.onSelectPuzzle(option.value);
+      });
+      this.puzzleButtons.set(option.value, btn);
+      puzzleSegmented.append(btn);
+    }
+    puzzleCluster.append(puzzleSegmented);
 
     // 2. Top-Right Tactile Audio Mute Toggle
     const audioCluster = document.createElement('div');
@@ -235,7 +292,7 @@ export class ControlHUD {
     );
     this.dockWrap.append(this.collapseBtn, bar);
 
-    this.root.append(statusCluster, audioCluster, this.dockWrap);
+    this.root.append(statusCluster, puzzleCluster, audioCluster, this.dockWrap);
 
     this.onKeyDown = (e: KeyboardEvent) => {
       if (
@@ -321,6 +378,14 @@ export class ControlHUD {
     this.solveText.textContent = snapshot.solveButtonLabel;
     this.solveIcon.innerHTML = snapshot.isSolvedBadge ? ICON_CHECK : ICON_SOLVE;
 
+    // Segmented puzzle switcher state (disabled cleanly while any animation/scramble/solve runs)
+    for (const [puzzleVal, btn] of this.puzzleButtons.entries()) {
+      const isActive = snapshot.puzzleType === puzzleVal;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-pressed', String(isActive));
+      btn.disabled = snapshot.puzzleSwitcherDisabled;
+    }
+
     // Segmented motion speed selector state
     for (const [speedVal, btn] of this.speedButtons.entries()) {
       const isActive = snapshot.speedMultiplier === speedVal;
@@ -330,6 +395,7 @@ export class ControlHUD {
 
     // Expose machine state cleanly on body for accessibility & automated checks
     document.body.dataset.machineState = snapshot.state;
+    document.body.dataset.puzzleType = snapshot.puzzleType;
     document.body.dataset.scrambled = String(snapshot.isScrambled);
     document.body.dataset.stopping = String(snapshot.isStoppingScramble);
     document.body.dataset.solving = String(snapshot.isSolving);

@@ -5,7 +5,12 @@ import {getMoveSpec, type CubeMoveNotation} from './cubeMoves';
 import type {RoboticArm} from './RoboticArm';
 import type {RubiksCube} from './RubiksCube';
 import type {ServoAudio} from './ServoAudio';
-import type {MachineSnapshot, MachineState, MotionSpeed} from './types';
+import type {
+  MachineSnapshot,
+  MachineState,
+  MotionSpeed,
+  PuzzleType,
+} from './types';
 
 export interface AnimationControllerConfig {
   leftArm: RoboticArm;
@@ -17,7 +22,8 @@ export interface AnimationControllerConfig {
 
 /**
  * Coordinates the RoboticsChoreography state machine with the 3D RoboticArms,
- * RubiksCube face-turn pivot engine, dynamic tabletop contact shadow, and procedural servo audio.
+ * RubiksCube (Classic 3x3 & Metallic Mirror Cube) face-turn pivot engine,
+ * dynamic tabletop contact shadow, and procedural servo audio.
  */
 export class AnimationController {
   public readonly choreography: RoboticsChoreography;
@@ -39,6 +45,8 @@ export class AnimationController {
     this.audio = config.audio;
 
     this.choreography = new RoboticsChoreography();
+    this.choreography.syncPuzzleBounds(this.rubiksCube.getBoundsSnapshot());
+
     this.unsubscribeAudio = this.choreography.subscribe((snapshot) => {
       if (snapshot.state !== this.lastState) {
         this.lastState = snapshot.state;
@@ -56,6 +64,10 @@ export class AnimationController {
     return this.choreography.getSnapshot();
   }
 
+  getPuzzleType(): PuzzleType {
+    return this.choreography.getPuzzleType();
+  }
+
   subscribe(listener: (snapshot: MachineSnapshot) => void): () => void {
     return this.choreography.subscribe(listener);
   }
@@ -64,6 +76,15 @@ export class AnimationController {
   togglePickUpPutDown(): boolean {
     this.audio.unlock();
     return this.choreography.triggerPrimaryAction();
+  }
+
+  /**
+   * Switches between `'classic'` (Classic 3x3) and `'mirror'` (Metallic Mirror Cube).
+   * Automatically executes Put Down first if currently held, then performs a smooth swap.
+   */
+  requestPuzzleSwitch(target: PuzzleType): boolean {
+    this.audio.unlock();
+    return this.choreography.requestPuzzleSwitch(target);
   }
 
   /**
@@ -127,60 +148,77 @@ export class AnimationController {
     frame: ReturnType<RoboticsChoreography['evaluateFrame']>,
     dt: number,
   ): void {
-    const recordHistory = frame.committedMovesRecordHistory;
+    let activeFrame = frame;
 
-    // 1. Commit any face turns that finished during this frame step (zero skipped moves)
-    for (const completedMove of frame.committedMoves) {
-      if (this.activeTurnId === -1) {
-        // Move started and finished inside a single large dt step
-        this.rubiksCube.applyMoveInstant(completedMove, recordHistory);
-      } else {
-        this.rubiksCube.commitActiveMove(recordHistory);
-        this.activeTurnId = -1;
-      }
+    // 0. Rebuild puzzle geometry mid-swap while scaled down to 0 and immediately sync new bounds
+    if (activeFrame.commitPuzzleSwap) {
+      this.activeTurnId = -1;
+      this.rubiksCube.setPuzzleType(activeFrame.commitPuzzleSwap);
+      this.choreography.syncPuzzleBounds(this.rubiksCube.getBoundsSnapshot());
+      activeFrame = this.choreography.evaluateFrame();
       this.audio.playLayerLockClick();
     }
 
+    const recordHistory = activeFrame.committedMovesRecordHistory;
+
+    // 1. Commit any face turns that finished during this frame step (zero skipped moves)
+    if (activeFrame.committedMoves.length > 0) {
+      for (const completedMove of activeFrame.committedMoves) {
+        if (this.activeTurnId === -1) {
+          this.rubiksCube.applyMoveInstant(completedMove, recordHistory);
+        } else {
+          this.rubiksCube.commitActiveMove(recordHistory);
+          this.activeTurnId = -1;
+        }
+        this.audio.playLayerLockClick();
+      }
+      // Measure live asymmetric outer surface extents immediately after cubies snap to grid
+      this.choreography.syncPuzzleBounds(this.rubiksCube.getBoundsSnapshot());
+    }
+
     // 2. Clear accumulated moveHistory once Auto-Solve completes & verify zero-drift solved state
-    if (frame.clearHistoryOnFinish) {
+    if (activeFrame.clearHistoryOnFinish) {
       this.rubiksCube.clearMoveHistory();
     }
 
     // 3. Drive live active face-turn pivot in exact lockstep with the twisting gripper wrist
-    if (frame.activeFaceTurn) {
-      if (this.activeTurnId !== frame.activeFaceTurn.turnId) {
-        this.activeTurnId = frame.activeFaceTurn.turnId;
-        this.rubiksCube.beginMove(frame.activeFaceTurn.move);
+    if (activeFrame.activeFaceTurn) {
+      if (this.activeTurnId !== activeFrame.activeFaceTurn.turnId) {
+        this.activeTurnId = activeFrame.activeFaceTurn.turnId;
+        this.rubiksCube.beginMove(activeFrame.activeFaceTurn.move);
         this.audio.playFaceTwistCue(
-          getMoveSpec(frame.activeFaceTurn.move).prime,
-          frame.snapshot.speedMultiplier,
+          getMoveSpec(activeFrame.activeFaceTurn.move).prime,
+          activeFrame.snapshot.speedMultiplier,
         );
       }
-      this.rubiksCube.setActiveMoveProgress(frame.activeFaceTurn.easedProgress);
+      this.rubiksCube.setActiveMoveProgress(
+        activeFrame.activeFaceTurn.easedProgress,
+      );
     }
 
     // 4. Apply arm joint angles & LED visuals
-    this.leftArm.applyJointAngles(frame.leftAngles);
-    this.rightArm.applyJointAngles(frame.rightAngles);
+    this.leftArm.applyJointAngles(activeFrame.leftAngles);
+    this.rightArm.applyJointAngles(activeFrame.rightAngles);
 
     this.leftArm.updateVisuals(dt);
     this.rightArm.updateVisuals(dt);
 
-    // 5. Position & orient the Rubik's Cube rigidly at the gripper midpoint
+    // 5. Position, orient & scale the active puzzle rigidly at the gripper midpoint or pad
     this.rubiksCube.position.set(
-      frame.cubePosition.x,
-      frame.cubePosition.y,
-      frame.cubePosition.z,
+      activeFrame.cubePosition.x,
+      activeFrame.cubePosition.y,
+      activeFrame.cubePosition.z,
     );
-    this.rubiksCube.rotation.set(frame.cubePitch, frame.cubeYaw, 0);
+    this.rubiksCube.rotation.set(activeFrame.cubePitch, activeFrame.cubeYaw, 0);
+    this.rubiksCube.scale.setScalar(activeFrame.cubeScale);
 
     // 6. Softly expand, translate, and soften the radial contact shadow on the pad
-    const liftNorm = Math.min(1, frame.cubeLiftHeight / 0.28);
-    const shadowScale = 1 + liftNorm * 0.42;
+    const liftNorm = Math.min(1, activeFrame.cubeLiftHeight / 0.28);
+    const shadowScale = (1 + liftNorm * 0.42) * Math.max(0.15, activeFrame.cubeScale);
     this.cubeShadowMesh.scale.setScalar(shadowScale);
-    this.cubeShadowMesh.position.x = frame.cubePosition.x * 0.65;
+    this.cubeShadowMesh.position.x = activeFrame.cubePosition.x * 0.65;
     const mat = this.cubeShadowMesh.material as THREE.MeshBasicMaterial;
-    mat.opacity = 0.56 * (1 - liftNorm * 0.62);
+    mat.opacity = 0.56 * (1 - liftNorm * 0.62) * activeFrame.cubeScale;
   }
 
   dispose(): void {

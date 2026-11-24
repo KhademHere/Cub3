@@ -157,6 +157,70 @@ canvas {
   background-color: #2dd4bf;
 }
 
+/* Top-Center Segmented Puzzle Switcher (Classic 3x3 | Mirror Cube) */
+.puzzle-cluster {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 22;
+  pointer-events: auto;
+}
+
+.puzzle-segmented {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border-radius: 11px;
+  background: var(--lab-surface);
+  border: 1px solid var(--lab-border-strong);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.48);
+}
+
+.puzzle-btn {
+  appearance: none;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 6px 13px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: 'Inter', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  background: transparent;
+  color: var(--lab-text-muted);
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    opacity 0.16s ease;
+}
+
+.puzzle-btn:hover:not(:disabled):not(.active) {
+  color: var(--lab-text);
+  background: rgba(148, 163, 184, 0.12);
+}
+
+.puzzle-btn.active {
+  background: rgba(34, 211, 238, 0.18);
+  border-color: rgba(34, 211, 238, 0.48);
+  color: #67e8f9;
+}
+
+.puzzle-btn:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.puzzle-btn.active:disabled {
+  opacity: 0.72;
+}
+
 /* Top-Right Floating Audio Mute Toggle */
 .audio-cluster {
   position: fixed;
@@ -499,6 +563,7 @@ canvas {
 .btn-scramble:focus-visible,
 .btn-solve:focus-visible,
 .speed-btn:focus-visible,
+.puzzle-btn:focus-visible,
 .btn-icon:focus-visible,
 .btn-audio-corner:focus-visible,
 .dock-collapse-btn:focus-visible {
@@ -553,12 +618,25 @@ canvas {
   .control-hint {
     display: none;
   }
+
+  .puzzle-cluster {
+    top: 70px;
+  }
 }
 
 @media (max-width: 720px) {
   .status-cluster {
     top: 12px;
     left: 12px;
+  }
+
+  .puzzle-cluster {
+    top: 62px;
+  }
+
+  .puzzle-btn {
+    padding: 5px 10px;
+    font-size: 12px;
   }
 
   .audio-cluster {

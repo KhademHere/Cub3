@@ -15,7 +15,11 @@ import {
   type CubeMoveNotation,
 } from './cubeMoves';
 import type {LabMaterialLibrary} from './materials';
-import {RubiksCube} from './RubiksCube';
+import {
+  MIRROR_CORE_SLICE_UNIT,
+  MIRROR_LAYER_UNITS,
+  RubiksCube,
+} from './RubiksCube';
 
 const ALL_CUBE_MOVES = Object.keys(MOVE_SPECS) as CubeMoveNotation[];
 
@@ -45,6 +49,12 @@ function createHeadlessMaterials(): LabMaterialLibrary {
       orange: phys,
       blue: phys,
       green: phys,
+    },
+    mirrorCubeCore: std,
+    mirrorCubeTiles: {
+      xAxis: phys,
+      yAxis: phys,
+      zAxis: phys,
     },
     contactShadow: basic,
     dispose: () => {
@@ -327,5 +337,118 @@ test('computeOptimizedSolution solves back-to-back scrambles on RubiksCube back 
   cube.dispose();
   materials.dispose();
 });
+
+test('Mirror Cube has exact M=0.86 core alignment, 3.00-unit solved footprint, zero cubie overlap over 50 moves, and exact Auto-Solve', () => {
+  const materials = createHeadlessMaterials();
+  const cube = new RubiksCube(materials, 'mirror');
+
+  assert.equal(cube.getPuzzleType(), 'mirror');
+  assert.equal(cube.cubies.length, 27);
+  assert.equal(cube.isSolved(), true);
+
+  // 1. Verify exact M = 0.86 core alignment and 3.00-unit total solved width on all 3 axes
+  for (const axis of ['x', 'y', 'z'] as const) {
+    assert.equal(MIRROR_LAYER_UNITS[axis]['0'], MIRROR_CORE_SLICE_UNIT);
+    const totalUnits =
+      MIRROR_LAYER_UNITS[axis]['-1'] +
+      MIRROR_LAYER_UNITS[axis]['0'] +
+      MIRROR_LAYER_UNITS[axis]['1'];
+    assert.ok(
+      Math.abs(totalUnits - 3.0) < 1e-9,
+      `Expected ${axis}-axis total 3.00 units, got ${totalUnits}`,
+    );
+  }
+
+  // Solved outer bounds must be strictly asymmetric around core (0,0,0) yet span ~0.210m+tiles per axis
+  const solvedBounds = cube.getBoundsSnapshot();
+  assert.equal(solvedBounds.puzzleType, 'mirror');
+  assert.ok(Math.abs(solvedBounds.maxX) > Math.abs(solvedBounds.minX) + 0.05);
+  assert.ok(Math.abs(solvedBounds.maxY) > Math.abs(solvedBounds.minY) + 0.04);
+  assert.ok(Math.abs(solvedBounds.maxZ) > Math.abs(solvedBounds.minZ) + 0.03);
+  assert.ok(Math.abs((solvedBounds.maxX - solvedBounds.minX) - 0.214) < 0.004);
+  assert.ok(Math.abs((solvedBounds.maxY - solvedBounds.minY) - 0.214) < 0.004);
+  assert.ok(Math.abs((solvedBounds.maxZ - solvedBounds.minZ) - 0.214) < 0.004);
+
+  // Helper: pairwise cubie AABB intersection check (verifies zero cubie-to-cubie overlap!)
+  const assertZeroCubieOverlap = (stepLabel: string) => {
+    const boxes = cube.cubies.map((u) => {
+      const a = u.localMin.clone().applyQuaternion(u.group.quaternion).add(u.group.position);
+      const b = u.localMax.clone().applyQuaternion(u.group.quaternion).add(u.group.position);
+      return {
+        name: u.group.name,
+        minX: Math.min(a.x, b.x),
+        maxX: Math.max(a.x, b.x),
+        minY: Math.min(a.y, b.y),
+        maxY: Math.max(a.y, b.y),
+        minZ: Math.min(a.z, b.z),
+        maxZ: Math.max(a.z, b.z),
+      };
+    });
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const A = boxes[i];
+        const B = boxes[j];
+        const ox = Math.min(A.maxX, B.maxX) - Math.max(A.minX, B.minX);
+        const oy = Math.min(A.maxY, B.maxY) - Math.max(A.minY, B.minY);
+        const oz = Math.min(A.maxZ, B.maxZ) - Math.max(A.minZ, B.minZ);
+        assert.ok(
+          ox <= 1e-4 || oy <= 1e-4 || oz <= 1e-4,
+          `Cubie overlap at ${stepLabel}: ${A.name} vs ${B.name} (${(ox * 1000).toFixed(2)}, ${(oy * 1000).toFixed(2)}, ${(oz * 1000).toFixed(2)} mm)`,
+        );
+      }
+    }
+  };
+
+  assertZeroCubieOverlap('solved');
+
+  // 2. Run 50 continuous random moves on Mirror Cube and verify shape-shifting + zero overlap
+  const gen = new ContinuousScrambleGenerator(makeSeededRng(9001));
+  let maxObservedSpan = 0;
+  for (let i = 0; i < 50; i++) {
+    const move = gen.next();
+    cube.beginMove(move);
+    cube.setActiveMoveProgress(0.5);
+    cube.setActiveMoveProgress(1);
+    cube.commitActiveMove(true);
+    assertZeroCubieOverlap(`scramble move ${i + 1} (${move})`);
+
+    const b = cube.getBoundsSnapshot();
+    maxObservedSpan = Math.max(
+      maxObservedSpan,
+      b.maxX - b.minX,
+      b.maxY - b.minY,
+      b.maxZ - b.minZ,
+    );
+  }
+
+  assert.equal(cube.isSolved(), false);
+  assert.ok(
+    maxObservedSpan > 0.24,
+    `Expected scrambled Mirror Cube to physically expand beyond solved 0.214m width, got ${maxObservedSpan.toFixed(4)}m`,
+  );
+
+  // 3. Deterministic optimized Auto-Solve restores 100% solved Mirror Cube with zero drift
+  const solution = computeOptimizedSolution(cube.getMoveHistory());
+  for (let i = 0; i < solution.length; i++) {
+    cube.beginMove(solution[i]);
+    cube.setActiveMoveProgress(1);
+    cube.commitActiveMove(false);
+    assertZeroCubieOverlap(`solve move ${i + 1} (${solution[i]})`);
+  }
+  cube.clearMoveHistory();
+  assert.equal(cube.isSolved(), true, 'Mirror Cube must fold back to 100% solved state');
+
+  // 4. Switching back to Classic 3x3 rebuilds cleanly and clears history
+  cube.applyMoveInstant('R', true);
+  assert.equal(cube.getMoveHistory().length, 1);
+  cube.setPuzzleType('classic');
+  assert.equal(cube.getPuzzleType(), 'classic');
+  assert.equal(cube.getMoveHistory().length, 0);
+  assert.equal(cube.isSolved(), true);
+
+  cube.dispose();
+  materials.dispose();
+});
+
 
 

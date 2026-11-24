@@ -103,6 +103,17 @@ export function getJawInnerSeparation(jawOpen: number): number {
 }
 
 /**
+ * Computes the individual sliding carriage offset (meters from wrist center) for a jaw pad
+ * targeting a specific live surface extent (supports asymmetric Mirror Cube blocks cleanly).
+ */
+export function getJawHalfPosition(
+  clampExtent: number,
+  jawOpen: number,
+): number {
+  return clampExtent + clamp01(jawOpen) * LAB_DIMENSIONS.JAW_MAX_OPEN_OFFSET;
+}
+
+/**
  * Computes the arm base origin in world coordinates.
  */
 export function getArmBasePosition(side: ArmSide): Vec3 {
@@ -132,11 +143,15 @@ export function solveArmIK(
     jawOpen?: number;
     wristRoll?: number;
     gripperWorldPitch?: number;
+    frontJawExtent?: number;
+    rearJawExtent?: number;
   } = {},
 ): ArmJointAngles {
   const jawOpen = clamp01(options.jawOpen ?? 1);
   const wristRoll = options.wristRoll ?? 0;
   const gripperWorldPitch = options.gripperWorldPitch ?? 0;
+  const frontJawExtent = options.frontJawExtent;
+  const rearJawExtent = options.rearJawExtent;
 
   const base = getArmBasePosition(side);
   const inwardSign = side === 'left' ? 1 : -1;
@@ -207,6 +222,8 @@ export function solveArmIK(
     wristPitch,
     wristRoll,
     jawOpen,
+    ...(frontJawExtent !== undefined ? {frontJawExtent} : {}),
+    ...(rearJawExtent !== undefined ? {rearJawExtent} : {}),
   };
 }
 

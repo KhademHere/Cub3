@@ -94,6 +94,7 @@ async function bootstrap(): Promise<void> {
       onPrimaryAction: () => workbenchScene.triggerPrimaryAction(),
       onScramble: () => workbenchScene.toggleScramble(),
       onAutoSolve: () => workbenchScene.triggerAutoSolve(),
+      onSelectPuzzle: (puzzle) => workbenchScene.requestPuzzleSwitch(puzzle),
       onSetSpeed: (speed) => workbenchScene.setSpeedMultiplier(speed),
       onResetCamera: () => workbenchScene.resetCameraView(),
       onToggleMute: () => workbenchScene.toggleMute(),

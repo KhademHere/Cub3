@@ -19,6 +19,12 @@ export interface LabMaterialLibrary {
     'white' | 'yellow' | 'red' | 'orange' | 'blue' | 'green',
     THREE.MeshPhysicalMaterial
   >;
+  mirrorCubeCore: THREE.MeshStandardMaterial;
+  mirrorCubeTiles: {
+    xAxis: THREE.MeshPhysicalMaterial;
+    yAxis: THREE.MeshPhysicalMaterial;
+    zAxis: THREE.MeshPhysicalMaterial;
+  };
   dispose: () => void;
 }
 
@@ -174,6 +180,82 @@ function createBrushedMetalTexture(maxAnisotropy: number): THREE.CanvasTexture {
 }
 
 /**
+ * Generates a high-resolution directional hairline brushed-chrome texture
+ * for Mirror Cube metallic tiles (albedo/sheen + fine brushed bump).
+ */
+function createMirrorChromeTextures(maxAnisotropy: number): {
+  albedoMap: THREE.CanvasTexture;
+  bumpMap: THREE.CanvasTexture;
+} {
+  const size = 512;
+  const albedoCanvas = document.createElement('canvas');
+  albedoCanvas.width = size;
+  albedoCanvas.height = size;
+  const aCtx = albedoCanvas.getContext('2d')!;
+
+  const bumpCanvas = document.createElement('canvas');
+  bumpCanvas.width = size;
+  bumpCanvas.height = size;
+  const bCtx = bumpCanvas.getContext('2d')!;
+
+  // Subtle aerospace silver-chrome gradient base
+  const grad = aCtx.createLinearGradient(0, 0, size, size);
+  grad.addColorStop(0, '#eef3fa');
+  grad.addColorStop(0.5, '#dbe3ee');
+  grad.addColorStop(1, '#e8eef7');
+  aCtx.fillStyle = grad;
+  aCtx.fillRect(0, 0, size, size);
+
+  bCtx.fillStyle = '#808080';
+  bCtx.fillRect(0, 0, size, size);
+
+  let seed = 8821;
+  const rand = () => {
+    seed = (seed * 48271) % 2147483647;
+    return (seed - 1) / 2147483646;
+  };
+
+  // Continuous fine horizontal hairline brush strokes
+  for (let y = 0; y < size; y++) {
+    const delta = Math.floor((rand() - 0.5) * 26);
+    const aTone = Math.min(255, Math.max(198, 228 + delta));
+    aCtx.fillStyle = `rgba(${aTone},${aTone + 2},${Math.min(255, aTone + 6)},0.34)`;
+    aCtx.fillRect(0, y, size, 1);
+
+    const bTone = Math.min(255, Math.max(70, 128 + delta * 2));
+    bCtx.fillStyle = `rgb(${bTone},${bTone},${bTone})`;
+    bCtx.fillRect(0, y, size, 1);
+  }
+
+  // Crisp micro-specular directional brush streaks
+  for (let i = 0; i < 1100; i++) {
+    const x = rand() * size;
+    const y = rand() * size;
+    const len = 36 + rand() * 140;
+    const bright = rand() > 0.48;
+    aCtx.fillStyle = bright ? 'rgba(255,255,255,0.20)' : 'rgba(130,145,165,0.16)';
+    aCtx.fillRect(x, y, len, 1);
+    bCtx.fillStyle = bright ? 'rgba(215,215,215,0.28)' : 'rgba(65,65,65,0.28)';
+    bCtx.fillRect(x, y, len, 1);
+  }
+
+  const albedoMap = new THREE.CanvasTexture(albedoCanvas);
+  albedoMap.colorSpace = THREE.SRGBColorSpace;
+  albedoMap.wrapS = THREE.RepeatWrapping;
+  albedoMap.wrapT = THREE.RepeatWrapping;
+  albedoMap.anisotropy = maxAnisotropy;
+  albedoMap.needsUpdate = true;
+
+  const bumpMap = new THREE.CanvasTexture(bumpCanvas);
+  bumpMap.wrapS = THREE.RepeatWrapping;
+  bumpMap.wrapT = THREE.RepeatWrapping;
+  bumpMap.anisotropy = maxAnisotropy;
+  bumpMap.needsUpdate = true;
+
+  return {albedoMap, bumpMap};
+}
+
+/**
  * Generates a diamond-knurled anti-slip bump texture for rubberized gripper pads.
  */
 function createKnurledRubberTexture(maxAnisotropy: number): THREE.CanvasTexture {
@@ -243,6 +325,7 @@ function createContactShadowTexture(): THREE.CanvasTexture {
 export function createLabMaterials(maxAnisotropy: number): LabMaterialLibrary {
   const gridMap = createWorkbenchGridTexture(maxAnisotropy);
   const brushedBump = createBrushedMetalTexture(maxAnisotropy);
+  const mirrorChrome = createMirrorChromeTextures(maxAnisotropy);
   const knurlBump = createKnurledRubberTexture(maxAnisotropy);
   const shadowMap = createContactShadowTexture();
 
@@ -359,6 +442,39 @@ export function createLabMaterials(maxAnisotropy: number): LabMaterialLibrary {
     green: makeTileMaterial(0x149946),
   };
 
+  const mirrorCubeCore = new THREE.MeshStandardMaterial({
+    color: 0x0a0d12,
+    roughness: 0.62,
+    metalness: 0.16,
+  });
+
+  const makeMirrorTileMaterial = (
+    tintHex: number,
+    anisotropyRotation: number,
+    roughness: number,
+  ) =>
+    new THREE.MeshPhysicalMaterial({
+      color: tintHex,
+      map: mirrorChrome.albedoMap,
+      bumpMap: mirrorChrome.bumpMap,
+      bumpScale: 0.0014,
+      metalness: 0.94,
+      roughness,
+      anisotropy: 0.85,
+      anisotropyRotation,
+      clearcoat: 0.36,
+      clearcoatRoughness: 0.14,
+      envMapIntensity: 1.32,
+    });
+
+  // Subtle brushed-grain orientation & luminance nuance across orthogonal planes
+  // so every asymmetric block catches key and rim studio lights dramatically.
+  const mirrorCubeTiles = {
+    xAxis: makeMirrorTileMaterial(0xe4ebf4, 0, 0.18),
+    yAxis: makeMirrorTileMaterial(0xf0f4fa, Math.PI / 2, 0.16),
+    zAxis: makeMirrorTileMaterial(0xdbe3ee, Math.PI / 4, 0.19),
+  };
+
   const allMaterials: THREE.Material[] = [
     tableTop,
     tableEdge,
@@ -375,10 +491,14 @@ export function createLabMaterials(maxAnisotropy: number): LabMaterialLibrary {
     contactShadow,
     cubeCore,
     ...Object.values(cubeTiles),
+    mirrorCubeCore,
+    ...Object.values(mirrorCubeTiles),
   ];
   const allTextures: THREE.Texture[] = [
     gridMap,
     brushedBump,
+    mirrorChrome.albedoMap,
+    mirrorChrome.bumpMap,
     knurlBump,
     shadowMap,
   ];
@@ -399,6 +519,8 @@ export function createLabMaterials(maxAnisotropy: number): LabMaterialLibrary {
     contactShadow,
     cubeCore,
     cubeTiles,
+    mirrorCubeCore,
+    mirrorCubeTiles,
     dispose() {
       for (const mat of allMaterials) mat.dispose();
       for (const tex of allTextures) tex.dispose();

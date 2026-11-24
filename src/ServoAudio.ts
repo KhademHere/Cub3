@@ -72,6 +72,9 @@ export class ServoAudio {
       case 'CELEBRATING':
         this.playSolvedChime();
         break;
+      case 'SWAPPING':
+        this.playServoSweep(240, 520, 0.36, 0.03);
+        break;
       case 'STANDBY':
         break;
     }
