@@ -86,82 +86,99 @@ interface MoveSubStep {
 
 /**
  * Builds the ordered physical manipulation micro-steps for any of the 12 standard moves.
- * Every micro-step maintains exact perpendicular flush contact and zero clipping.
+ * Every transition enforces a strict 3-step Retract -> Exterior Arc / Unwind -> Straight Approach
+ * clearance protocol so neither arm ever clips into the cube, the other arm, or the tabletop.
  */
 function buildMoveSteps(spec: CubeMoveSpec): MoveSubStep[] {
   if (spec.face === 'L' || spec.face === 'R') {
     return [
       {kind: 'lr_twist', duration: 0.30, isTwist: true},
-      {kind: 'lr_open', duration: 0.12},
+      {kind: 'lr_open_retract', duration: 0.14},
       {kind: 'lr_unwind', duration: 0.20},
-      {kind: 'lr_close', duration: 0.12},
+      {kind: 'lr_approach_close', duration: 0.15},
     ];
   }
   if (spec.face === 'U') {
     return [
       {kind: 'u_open_right', duration: 0.14},
-      {kind: 'u_to_top', duration: 0.30},
-      {kind: 'u_clamp_top', duration: 0.12},
+      {kind: 'u_to_top', duration: 0.32},
+      {kind: 'u_clamp_top', duration: 0.14},
       {kind: 'u_twist', duration: 0.30, isTwist: true},
-      {kind: 'u_release_top', duration: 0.12},
-      {kind: 'u_to_side', duration: 0.30},
+      {kind: 'u_release_top', duration: 0.14},
+      {kind: 'u_to_side', duration: 0.32},
       {kind: 'u_clamp_side', duration: 0.14},
     ];
   }
   if (spec.face === 'D') {
     return [
-      {kind: 'd_open_left', duration: 0.14},
-      {kind: 'd_to_bottom', duration: 0.30},
-      {kind: 'd_clamp_bottom', duration: 0.12},
+      {kind: 'd_flip_cube', duration: 0.34},
+      {kind: 'd_open_right', duration: 0.14},
+      {kind: 'd_to_top', duration: 0.32},
+      {kind: 'd_clamp_top', duration: 0.14},
       {kind: 'd_twist', duration: 0.30, isTwist: true},
-      {kind: 'd_release_bottom', duration: 0.12},
-      {kind: 'd_to_side', duration: 0.30},
+      {kind: 'd_release_top', duration: 0.14},
+      {kind: 'd_to_side', duration: 0.32},
       {kind: 'd_clamp_side', duration: 0.14},
+      {kind: 'd_unflip_cube', duration: 0.34},
     ];
   }
-  // F or B: Right arm grips Top (+Y), Left backs clear past cube diagonal,
-  // Right yaws entire cube ∓90deg to present F/B face flush to Left arm,
-  // Left clamps & twists layer 90deg, unwinds & backs clear, Right restores upright!
+  // F or B:
+  // 1. Right retracts out, arcs overhead, clamps +Y on ±Z.
+  // 2. Left opens & retracts wide clear of cube diagonal + rotating Right rail.
+  // 3. Right yaws whole cube ∓90deg to present F/B flush to Left (-X).
+  // 4. Left advances & clamps -X (on ±Z, 57mm clear below Right jaws!).
+  // 5. Right opens, lifts straight UP clear of cube, unwinds wrist roll back to ±Z
+  //    (strictly centered on stationary middle slice X ∈ [-22mm, +22mm]), and re-clamps +Y!
+  // 6. Left twists F/B 90deg with 57mm pure horizontal clearance from Right gripper!
+  // 7. Left opens, retracts wide clear, and unwinds wrist roll back to 0 in open air.
+  // 8. Right restores cube yaw smoothly back to 0 (rotating its wrist 0 -> +presentYaw).
+  // 9. Left advances & re-clamps -X; Right releases +Y, lifts straight UP, arcs cleanly
+  //    back to right side while unwinding roll to 0, approaches flush & re-clamps +X!
   return [
     {kind: 'fb_open_right', duration: 0.13},
-    {kind: 'fb_right_to_top', duration: 0.28},
-    {kind: 'fb_clamp_top', duration: 0.11},
+    {kind: 'fb_right_to_top', duration: 0.30},
+    {kind: 'fb_clamp_top', duration: 0.13},
     {kind: 'fb_open_retract_left', duration: 0.15},
     {kind: 'fb_present_cube', duration: 0.26},
     {kind: 'fb_advance_clamp_left', duration: 0.15},
+    {kind: 'fb_right_release_top_unwind', duration: 0.13},
+    {kind: 'fb_right_unwind_top', duration: 0.18},
+    {kind: 'fb_right_reclamp_top', duration: 0.13},
     {kind: 'fb_twist', duration: 0.30, isTwist: true},
-    {kind: 'fb_open_unwind_retract_left', duration: 0.20},
+    {kind: 'fb_open_retract_left_post', duration: 0.15},
+    {kind: 'fb_unwind_left_clear', duration: 0.16},
     {kind: 'fb_restore_cube', duration: 0.26},
     {kind: 'fb_advance_reclamp_left', duration: 0.15},
-    {kind: 'fb_release_top', duration: 0.11},
-    {kind: 'fb_right_to_side', duration: 0.28},
+    {kind: 'fb_release_top', duration: 0.13},
+    {kind: 'fb_right_to_side', duration: 0.30},
     {kind: 'fb_reclamp_right', duration: 0.13},
   ];
 }
 
-/** Pre-computed symmetrical anchor points in world space. */
+/** Pre-computed symmetrical anchor points in world space (exact flush outer tile contact + safe clearance). */
 function makeWaypoints() {
   const z = LAB_DIMENSIONS.TABLE_CENTER_Z;
   const restY = LAB_DIMENSIONS.CUBE_REST_Y;
   const holdY = LAB_DIMENSIONS.CUBE_HOLD_Y;
-  const half = LAB_DIMENSIONS.CUBE_HALF;
+  const half = LAB_DIMENSIONS.CUBE_OUTER_HALF;
 
-  // Poised industrial standby: slightly elevated, open wide, swept slightly back
-  const leftStandby: Vec3 = {x: -0.305, y: restY + 0.255, z: z - 0.035};
-  const rightStandby: Vec3 = {x: 0.305, y: restY + 0.255, z: z - 0.035};
+  // Poised industrial standby: elevated, open wide, flared outward
+  const leftStandby: Vec3 = {x: -0.32, y: restY + 0.265, z: z - 0.035};
+  const rightStandby: Vec3 = {x: 0.32, y: restY + 0.265, z: z - 0.035};
 
-  // Curved Bezier control points for graceful industrial sweep inward
-  const leftCtrl1: Vec3 = {x: -0.255, y: restY + 0.295, z: z - 0.012};
-  const leftCtrl2: Vec3 = {x: -0.178, y: restY + 0.055, z: z};
-  const rightCtrl1: Vec3 = {x: 0.255, y: restY + 0.295, z: z - 0.012};
-  const rightCtrl2: Vec3 = {x: 0.178, y: restY + 0.055, z: z};
+  // Elevated exterior Bezier control points so Pick Up / Put Down descend cleanly
+  // outside the cube and never dip into the workbench surface or cube corners
+  const leftCtrl1: Vec3 = {x: -0.295, y: restY + 0.28, z: z - 0.012};
+  const leftCtrl2: Vec3 = {x: -0.225, y: restY + 0.095, z: z};
+  const rightCtrl1: Vec3 = {x: 0.295, y: restY + 0.28, z: z - 0.012};
+  const rightCtrl2: Vec3 = {x: 0.225, y: restY + 0.095, z: z};
 
-  // Approach endpoint: aligned squarely with cube's left & right center faces, 22mm clear before clamp
-  const preClampGap = 0.022;
+  // Horizontal pre-clamp standoff: 58mm outside outer tile surface (jaw tips 30mm completely clear!)
+  const preClampGap = 0.058;
   const leftPreClamp: Vec3 = {x: -(half + preClampGap), y: restY, z};
   const rightPreClamp: Vec3 = {x: half + preClampGap, y: restY, z};
 
-  // Exact clamp contact on cube's left (-X) and right (+X) faces — zero clipping
+  // Exact flush clamp contact on cube's left (-X) and right (+X) outer tile surfaces
   const leftClampRest: Vec3 = {x: -half, y: restY, z};
   const rightClampRest: Vec3 = {x: half, y: restY, z};
 
@@ -169,26 +186,33 @@ function makeWaypoints() {
   const leftClampHold: Vec3 = {x: -half, y: holdY, z};
   const rightClampHold: Vec3 = {x: half, y: holdY, z};
 
-  // Overhead (U/F/B) cube shift position: right arm reaches straight down (-pi/2) cleanly inside IK envelope
-  const sideRetract = 0.068;
+  // Safe retract standoff for L/R wrist unwind (62mm outside cube face -> jaw tips 34mm clear!)
+  const lrUnwindRetract = 0.062;
+  const leftUnwindClear: Vec3 = {x: -(half + lrUnwindRetract), y: holdY, z};
+  const rightUnwindClear: Vec3 = {x: half + lrUnwindRetract, y: holdY, z};
+
+  // Mandatory exterior retract standoff for face-to-face arcs (88mm outside cube face -> jaw tips 60mm clear!)
+  const sideRetract = 0.088;
   const rightSideClear: Vec3 = {x: half + sideRetract, y: holdY, z};
   const leftSideClear: Vec3 = {x: -(half + sideRetract), y: holdY, z};
 
-  const cubeTopPos: Vec3 = {x: 0.09, y: 1.15, z};
+  // Overhead (U/F/B) cube shift position: right arm reaches straight down (-pi/2) well inside IK envelope
+  const cubeTopPos: Vec3 = {x: 0.09, y: 1.13, z};
   const rightTopContact: Vec3 = {x: cubeTopPos.x, y: cubeTopPos.y + half, z};
-  const rightTopClear: Vec3 = {x: cubeTopPos.x, y: cubeTopPos.y + half + 0.055, z};
-  const rightTopArc1: Vec3 = {x: 0.31, y: holdY + 0.125, z};
-  const rightTopArc2: Vec3 = {x: 0.24, y: cubeTopPos.y + half + 0.14, z};
+  const rightTopClear: Vec3 = {x: cubeTopPos.x, y: cubeTopPos.y + half + 0.082, z};
+  const rightTopArc1: Vec3 = {x: 0.34, y: 1.34, z};
+  const rightTopArc2: Vec3 = {x: 0.28, y: 1.42, z};
 
-  // Underneath (D) cube shift position: left arm reaches straight up (+pi/2) well above tabletop
-  const cubeBottomPos: Vec3 = {x: -0.09, y: 1.24, z};
+  // Underneath (D) cube shift position: left arm reaches straight up (+pi/2) with >= 75mm tabletop clearance!
+  const cubeBottomPos: Vec3 = {x: -0.09, y: 1.27, z};
   const leftBottomContact: Vec3 = {x: cubeBottomPos.x, y: cubeBottomPos.y - half, z};
-  const leftBottomClear: Vec3 = {x: cubeBottomPos.x, y: cubeBottomPos.y - half - 0.045, z};
-  const leftBottomArc1: Vec3 = {x: -0.31, y: holdY - 0.09, z};
-  const leftBottomArc2: Vec3 = {x: -0.24, y: cubeBottomPos.y - half - 0.085, z};
+  const leftBottomClear: Vec3 = {x: cubeBottomPos.x, y: cubeBottomPos.y - half - 0.082, z};
+  const leftBottomArc1: Vec3 = {x: -0.34, y: 1.09, z};
+  const leftBottomArc2: Vec3 = {x: -0.28, y: 1.02, z};
 
-  // Diagonal-clear retraction offset for Left arm while Right arm spins whole cube 90deg around Y
-  const leftSpinClearOffset = 0.095;
+  // Wide diagonal + opposing-rail clearance for Left arm during F/B whole-cube 90deg yaw
+  // Jaw tips sit at cubeX - (0.107 + 0.125 - 0.028) = cubeX - 0.204m (> 30mm clear of rotating Right rail!)
+  const leftSpinClearOffset = 0.125;
 
   return {
     leftStandby,
@@ -203,6 +227,8 @@ function makeWaypoints() {
     rightClampRest,
     leftClampHold,
     rightClampHold,
+    leftUnwindClear,
+    rightUnwindClear,
     rightSideClear,
     leftSideClear,
     cubeTopPos,
@@ -685,9 +711,10 @@ export class RoboticsChoreography {
       }
 
       case 'GRIPPING': {
+        // Two-stage clean clamp: advance straight inward with jaws wide open, then clamp flush!
         const rawT = clamp01(this.phaseElapsed / this.durations.grip);
-        const tPos = easeInOutCubic(Math.min(1, rawT / 0.55));
-        const tJaw = easeInOutCubic(rawT);
+        const tPos = easeInOutQuint(clamp01(rawT / 0.52));
+        const tJaw = easeInOutCubic(clamp01((rawT - 0.45) / 0.55));
 
         this._leftPos.x = lerp(wp.leftPreClamp.x, wp.leftClampRest.x, tPos);
         this._leftPos.y = wp.leftClampRest.y;
@@ -753,6 +780,7 @@ export class RoboticsChoreography {
         this._cubePos.x = pose.cubePos.x;
         this._cubePos.y = pose.cubePos.y;
         this._cubePos.z = pose.cubePos.z;
+        cubePitch = pose.cubePitch;
         cubeYaw = pose.cubeYaw;
         leftPitch = pose.leftPitch;
         rightPitch = pose.rightPitch;
@@ -822,9 +850,10 @@ export class RoboticsChoreography {
       }
 
       case 'RELEASING': {
+        // Two-stage clean release: open jaws wide first, then retract straight outward clear of cube!
         const rawT = clamp01(this.phaseElapsed / this.durations.release);
-        const tJaw = easeInOutCubic(rawT);
-        const tRetract = easeInOutCubic(clamp01((rawT - 0.35) / 0.65));
+        const tJaw = easeInOutCubic(clamp01(rawT / 0.48));
+        const tRetract = easeInOutQuint(clamp01((rawT - 0.42) / 0.58));
 
         this._leftPos.x = lerp(wp.leftClampRest.x, wp.leftPreClamp.x, tRetract);
         this._leftPos.y = wp.leftClampRest.y;
@@ -906,6 +935,7 @@ export class RoboticsChoreography {
     leftPos: Vec3;
     rightPos: Vec3;
     cubePos: Vec3;
+    cubePitch: number;
     cubeYaw: number;
     leftPitch: number;
     rightPitch: number;
@@ -916,7 +946,7 @@ export class RoboticsChoreography {
     activeFaceTurn: ActiveFaceTurnFrame | null;
   } {
     const wp = this.wp;
-    const half = LAB_DIMENSIONS.CUBE_HALF;
+    const half = LAB_DIMENSIONS.CUBE_OUTER_HALF;
     const z = LAB_DIMENSIONS.TABLE_CENTER_Z;
     const holdY = LAB_DIMENSIONS.CUBE_HOLD_Y;
 
@@ -924,6 +954,7 @@ export class RoboticsChoreography {
     const cubePos: Vec3 = {x: 0, y: holdY, z};
     const leftPos: Vec3 = {x: -half, y: holdY, z};
     const rightPos: Vec3 = {x: half, y: holdY, z};
+    let cubePitch = 0;
     let cubeYaw = 0;
     let leftPitch = 0;
     let rightPitch = 0;
@@ -940,6 +971,7 @@ export class RoboticsChoreography {
         leftPos,
         rightPos,
         cubePos,
+        cubePitch,
         cubeYaw,
         leftPitch,
         rightPitch,
@@ -956,7 +988,7 @@ export class RoboticsChoreography {
     const tQuint = easeInOutQuint(rawT);
 
     // -------------------------------------------------------------------------
-    // 1. L / L' and R / R': Direct synchronized wrist twist + jaw release/unwind
+    // 1. L / L' and R / R': Twist -> Open & Retract Clear -> Unwind -> Approach & Clamp
     // -------------------------------------------------------------------------
     if (spec.face === 'L' || spec.face === 'R') {
       const isLeft = spec.face === 'L';
@@ -973,33 +1005,49 @@ export class RoboticsChoreography {
             easedProgress: tQuint,
           };
           break;
-        case 'lr_open':
+        case 'lr_open_retract': {
+          const tOpen = easeInOutCubic(clamp01(rawT / 0.5));
+          const tRetract = easeInOutQuint(clamp01((rawT - 0.32) / 0.68));
           if (isLeft) {
             leftRoll = twistTarget;
-            leftJawOpen = tCubic;
+            leftJawOpen = tOpen;
+            leftPos.x = lerp(wp.leftClampHold.x, wp.leftUnwindClear.x, tRetract);
           } else {
             rightRoll = twistTarget;
-            rightJawOpen = tCubic;
+            rightJawOpen = tOpen;
+            rightPos.x = lerp(wp.rightClampHold.x, wp.rightUnwindClear.x, tRetract);
           }
           break;
+        }
         case 'lr_unwind':
           if (isLeft) {
+            leftPos.x = wp.leftUnwindClear.x;
             leftRoll = lerp(twistTarget, 0, tQuint);
             leftJawOpen = 1;
           } else {
+            rightPos.x = wp.rightUnwindClear.x;
             rightRoll = lerp(twistTarget, 0, tQuint);
             rightJawOpen = 1;
           }
           break;
-        case 'lr_close':
-          if (isLeft) leftJawOpen = lerp(1, 0, tCubic);
-          else rightJawOpen = lerp(1, 0, tCubic);
+        case 'lr_approach_close': {
+          const tIn = easeInOutQuint(clamp01(rawT / 0.58));
+          const tClose = easeInOutCubic(clamp01((rawT - 0.48) / 0.52));
+          if (isLeft) {
+            leftPos.x = lerp(wp.leftUnwindClear.x, wp.leftClampHold.x, tIn);
+            leftJawOpen = lerp(1, 0, tClose);
+          } else {
+            rightPos.x = lerp(wp.rightUnwindClear.x, wp.rightClampHold.x, tIn);
+            rightJawOpen = lerp(1, 0, tClose);
+          }
           break;
+        }
       }
       return {
         leftPos,
         rightPos,
         cubePos,
+        cubePitch,
         cubeYaw,
         leftPitch,
         rightPitch,
@@ -1012,7 +1060,7 @@ export class RoboticsChoreography {
     }
 
     // -------------------------------------------------------------------------
-    // 2. U / U': Left holds -X, Right arches cleanly overhead to +Y and twists
+    // 2. U / U': Left holds -X center slice, Right Retracts -> Exterior Arc -> Approaches +Y
     // -------------------------------------------------------------------------
     if (spec.face === 'U') {
       // Right overhead at pitch = -PI/2 rotates around world +Y by (-rightRoll)
@@ -1020,8 +1068,12 @@ export class RoboticsChoreography {
 
       switch (step.kind) {
         case 'u_open_right':
-          rightJawOpen = easeInOutCubic(clamp01(rawT / 0.55));
-          rightPos.x = lerp(wp.rightClampHold.x, wp.rightSideClear.x, tQuint);
+          rightJawOpen = easeInOutCubic(clamp01(rawT / 0.45));
+          rightPos.x = lerp(
+            wp.rightClampHold.x,
+            wp.rightSideClear.x,
+            easeInOutQuint(clamp01((rawT - 0.25) / 0.75)),
+          );
           break;
         case 'u_to_top':
           cubePos.x = lerp(0, wp.cubeTopPos.x, tQuint);
@@ -1045,9 +1097,13 @@ export class RoboticsChoreography {
           leftPos.x = cubePos.x - half;
           leftPos.y = cubePos.y;
           rightPos.x = wp.rightTopContact.x;
-          rightPos.y = lerp(wp.rightTopClear.y, wp.rightTopContact.y, easeInOutCubic(clamp01(rawT / 0.55)));
+          rightPos.y = lerp(
+            wp.rightTopClear.y,
+            wp.rightTopContact.y,
+            easeInOutQuint(clamp01(rawT / 0.56)),
+          );
           rightPitch = -Math.PI / 2;
-          rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.25) / 0.75)));
+          rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
           break;
         case 'u_twist':
           cubePos.x = wp.cubeTopPos.x;
@@ -1070,10 +1126,14 @@ export class RoboticsChoreography {
           leftPos.x = cubePos.x - half;
           leftPos.y = cubePos.y;
           rightPos.x = wp.rightTopContact.x;
-          rightPos.y = lerp(wp.rightTopContact.y, wp.rightTopClear.y, easeInOutCubic(clamp01((rawT - 0.35) / 0.65)));
+          rightPos.y = lerp(
+            wp.rightTopContact.y,
+            wp.rightTopClear.y,
+            easeInOutQuint(clamp01((rawT - 0.35) / 0.65)),
+          );
           rightPitch = -Math.PI / 2;
           rightRoll = twistTarget;
-          rightJawOpen = easeInOutCubic(clamp01(rawT / 0.6));
+          rightJawOpen = easeInOutCubic(clamp01(rawT / 0.48));
           break;
         case 'u_to_side':
           cubePos.x = lerp(wp.cubeTopPos.x, 0, tQuint);
@@ -1093,14 +1153,19 @@ export class RoboticsChoreography {
           rightJawOpen = 1;
           break;
         case 'u_clamp_side':
-          rightPos.x = lerp(wp.rightSideClear.x, wp.rightClampHold.x, easeInOutCubic(clamp01(rawT / 0.55)));
-          rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.3) / 0.7)));
+          rightPos.x = lerp(
+            wp.rightSideClear.x,
+            wp.rightClampHold.x,
+            easeInOutQuint(clamp01(rawT / 0.56)),
+          );
+          rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
           break;
       }
       return {
         leftPos,
         rightPos,
         cubePos,
+        cubePitch,
         cubeYaw,
         leftPitch,
         rightPitch,
@@ -1113,95 +1178,144 @@ export class RoboticsChoreography {
     }
 
     // -------------------------------------------------------------------------
-    // 3. D / D': Right holds +X, Left sweeps underneath to -Y and twists
+    // 3. D / D': Synchronized 180° Dual-Arm Cube Flip -> Overhead Right Arm Twist
+    // Keeps both elbows strictly up & outward with ZERO forearm-to-cube clipping
+    // and generous tabletop clearance throughout the entire sequence.
     // -------------------------------------------------------------------------
     if (spec.face === 'D') {
-      // Left underneath at pitch = +PI/2 rotates around world +Y by (+leftRoll)
+      // With cubePitch = +PI, local -Y (D face) points straight UP (+Y) and local +Y
+      // points along world -Y. Right overhead at pitch = -PI/2 rotates around world +Y
+      // by (-rightRoll), so rightRoll = +spec.angleRad matches local D rotation 1:1.
       const twistTarget = spec.angleRad;
 
       switch (step.kind) {
-        case 'd_open_left':
-          leftJawOpen = easeInOutCubic(clamp01(rawT / 0.55));
-          leftPos.x = lerp(wp.leftClampHold.x, wp.leftSideClear.x, tQuint);
+        case 'd_flip_cube':
+          cubePitch = Math.PI * tQuint;
+          leftRoll = cubePitch;
+          rightRoll = -cubePitch;
           break;
-        case 'd_to_bottom':
-          cubePos.x = lerp(0, wp.cubeBottomPos.x, tQuint);
-          cubePos.y = lerp(holdY, wp.cubeBottomPos.y, tQuint);
-          rightPos.x = cubePos.x + half;
-          rightPos.y = cubePos.y;
-          evalCubicBezier3(
-            wp.leftSideClear,
-            wp.leftBottomArc1,
-            wp.leftBottomArc2,
-            wp.leftBottomClear,
-            tQuint,
-            leftPos,
+        case 'd_open_right':
+          cubePitch = Math.PI;
+          leftRoll = Math.PI;
+          rightRoll = -Math.PI;
+          rightJawOpen = easeInOutCubic(clamp01(rawT / 0.45));
+          rightPos.x = lerp(
+            wp.rightClampHold.x,
+            wp.rightSideClear.x,
+            easeInOutQuint(clamp01((rawT - 0.25) / 0.75)),
           );
-          leftPitch = lerp(0, Math.PI / 2, easeInOutCubic(clamp01((rawT - 0.14) / 0.86)));
-          leftJawOpen = 1;
           break;
-        case 'd_clamp_bottom':
-          cubePos.x = wp.cubeBottomPos.x;
-          cubePos.y = wp.cubeBottomPos.y;
-          rightPos.x = cubePos.x + half;
-          rightPos.y = cubePos.y;
-          leftPos.x = wp.leftBottomContact.x;
-          leftPos.y = lerp(wp.leftBottomClear.y, wp.leftBottomContact.y, easeInOutCubic(clamp01(rawT / 0.55)));
-          leftPitch = Math.PI / 2;
-          leftJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.25) / 0.75)));
+        case 'd_to_top':
+          cubePitch = Math.PI;
+          leftRoll = Math.PI;
+          cubePos.x = lerp(0, wp.cubeTopPos.x, tQuint);
+          cubePos.y = lerp(holdY, wp.cubeTopPos.y, tQuint);
+          leftPos.x = cubePos.x - half;
+          leftPos.y = cubePos.y;
+          evalCubicBezier3(
+            wp.rightSideClear,
+            wp.rightTopArc1,
+            wp.rightTopArc2,
+            wp.rightTopClear,
+            tQuint,
+            rightPos,
+          );
+          rightPitch = lerp(0, -Math.PI / 2, easeInOutCubic(clamp01((rawT - 0.14) / 0.86)));
+          rightRoll = lerp(-Math.PI, 0, easeInOutCubic(clamp01((rawT - 0.1) / 0.8)));
+          rightJawOpen = 1;
+          break;
+        case 'd_clamp_top':
+          cubePitch = Math.PI;
+          leftRoll = Math.PI;
+          cubePos.x = wp.cubeTopPos.x;
+          cubePos.y = wp.cubeTopPos.y;
+          leftPos.x = cubePos.x - half;
+          leftPos.y = cubePos.y;
+          rightPos.x = wp.rightTopContact.x;
+          rightPos.y = lerp(
+            wp.rightTopClear.y,
+            wp.rightTopContact.y,
+            easeInOutQuint(clamp01(rawT / 0.56)),
+          );
+          rightPitch = -Math.PI / 2;
+          rightRoll = 0;
+          rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
           break;
         case 'd_twist':
-          cubePos.x = wp.cubeBottomPos.x;
-          cubePos.y = wp.cubeBottomPos.y;
-          rightPos.x = cubePos.x + half;
-          rightPos.y = cubePos.y;
-          leftPos.x = wp.leftBottomContact.x;
-          leftPos.y = wp.leftBottomContact.y;
-          leftPitch = Math.PI / 2;
-          leftRoll = twistTarget * tQuint;
+          cubePitch = Math.PI;
+          leftRoll = Math.PI;
+          cubePos.x = wp.cubeTopPos.x;
+          cubePos.y = wp.cubeTopPos.y;
+          leftPos.x = cubePos.x - half;
+          leftPos.y = cubePos.y;
+          rightPos.x = wp.rightTopContact.x;
+          rightPos.y = wp.rightTopContact.y;
+          rightPitch = -Math.PI / 2;
+          rightRoll = twistTarget * tQuint;
           activeFaceTurn = {
             move: spec.notation,
             turnId: this.currentTurnId,
             easedProgress: tQuint,
           };
           break;
-        case 'd_release_bottom':
-          cubePos.x = wp.cubeBottomPos.x;
-          cubePos.y = wp.cubeBottomPos.y;
-          rightPos.x = cubePos.x + half;
-          rightPos.y = cubePos.y;
-          leftPos.x = wp.leftBottomContact.x;
-          leftPos.y = lerp(wp.leftBottomContact.y, wp.leftBottomClear.y, easeInOutCubic(clamp01((rawT - 0.35) / 0.65)));
-          leftPitch = Math.PI / 2;
-          leftRoll = twistTarget;
-          leftJawOpen = easeInOutCubic(clamp01(rawT / 0.6));
+        case 'd_release_top':
+          cubePitch = Math.PI;
+          leftRoll = Math.PI;
+          cubePos.x = wp.cubeTopPos.x;
+          cubePos.y = wp.cubeTopPos.y;
+          leftPos.x = cubePos.x - half;
+          leftPos.y = cubePos.y;
+          rightPos.x = wp.rightTopContact.x;
+          rightPos.y = lerp(
+            wp.rightTopContact.y,
+            wp.rightTopClear.y,
+            easeInOutQuint(clamp01((rawT - 0.35) / 0.65)),
+          );
+          rightPitch = -Math.PI / 2;
+          rightRoll = twistTarget;
+          rightJawOpen = easeInOutCubic(clamp01(rawT / 0.48));
           break;
         case 'd_to_side':
-          cubePos.x = lerp(wp.cubeBottomPos.x, 0, tQuint);
-          cubePos.y = lerp(wp.cubeBottomPos.y, holdY, tQuint);
-          rightPos.x = cubePos.x + half;
-          rightPos.y = cubePos.y;
+          cubePitch = Math.PI;
+          leftRoll = Math.PI;
+          cubePos.x = lerp(wp.cubeTopPos.x, 0, tQuint);
+          cubePos.y = lerp(wp.cubeTopPos.y, holdY, tQuint);
+          leftPos.x = cubePos.x - half;
+          leftPos.y = cubePos.y;
           evalCubicBezier3(
-            wp.leftBottomClear,
-            wp.leftBottomArc2,
-            wp.leftBottomArc1,
-            wp.leftSideClear,
+            wp.rightTopClear,
+            wp.rightTopArc2,
+            wp.rightTopArc1,
+            wp.rightSideClear,
             tQuint,
-            leftPos,
+            rightPos,
           );
-          leftPitch = lerp(Math.PI / 2, 0, easeInOutCubic(clamp01(rawT / 0.86)));
-          leftRoll = lerp(twistTarget, 0, tQuint);
-          leftJawOpen = 1;
+          rightPitch = lerp(-Math.PI / 2, 0, easeInOutCubic(clamp01(rawT / 0.86)));
+          rightRoll = lerp(twistTarget, -Math.PI, easeInOutCubic(clamp01((rawT - 0.1) / 0.8)));
+          rightJawOpen = 1;
           break;
         case 'd_clamp_side':
-          leftPos.x = lerp(wp.leftSideClear.x, wp.leftClampHold.x, easeInOutCubic(clamp01(rawT / 0.55)));
-          leftJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.3) / 0.7)));
+          cubePitch = Math.PI;
+          leftRoll = Math.PI;
+          rightRoll = -Math.PI;
+          rightPos.x = lerp(
+            wp.rightSideClear.x,
+            wp.rightClampHold.x,
+            easeInOutQuint(clamp01(rawT / 0.56)),
+          );
+          rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
+          break;
+        case 'd_unflip_cube':
+          cubePitch = lerp(Math.PI, 0, tQuint);
+          leftRoll = cubePitch;
+          rightRoll = -cubePitch;
           break;
       }
       return {
         leftPos,
         rightPos,
         cubePos,
+        cubePitch,
         cubeYaw,
         leftPitch,
         rightPitch,
@@ -1214,7 +1328,7 @@ export class RoboticsChoreography {
     }
 
     // -------------------------------------------------------------------------
-    // 4. F / F' and B / B': Dual-arm overhead pass-off & 90deg cube re-orientation
+    // 4. F / F' and B / B': Zero-Overlap Overhead Pass-Off & Middle-Slice Regrip
     // -------------------------------------------------------------------------
     // For F (+Z): yaw whole cube -PI/2 so +Z faces -X (Left arm); Left twists by -angleRad
     // For B (-Z): yaw whole cube +PI/2 so -Z faces -X (Left arm); Left twists by +angleRad
@@ -1225,8 +1339,12 @@ export class RoboticsChoreography {
 
     switch (step.kind) {
       case 'fb_open_right':
-        rightJawOpen = easeInOutCubic(clamp01(rawT / 0.55));
-        rightPos.x = lerp(wp.rightClampHold.x, wp.rightSideClear.x, tQuint);
+        rightJawOpen = easeInOutCubic(clamp01(rawT / 0.45));
+        rightPos.x = lerp(
+          wp.rightClampHold.x,
+          wp.rightSideClear.x,
+          easeInOutQuint(clamp01((rawT - 0.25) / 0.75)),
+        );
         break;
       case 'fb_right_to_top':
         cubePos.x = lerp(0, wp.cubeTopPos.x, tQuint);
@@ -1250,9 +1368,13 @@ export class RoboticsChoreography {
         leftPos.x = leftAtCubeX;
         leftPos.y = cubePos.y;
         rightPos.x = wp.rightTopContact.x;
-        rightPos.y = lerp(wp.rightTopClear.y, wp.rightTopContact.y, easeInOutCubic(clamp01(rawT / 0.55)));
+        rightPos.y = lerp(
+          wp.rightTopClear.y,
+          wp.rightTopContact.y,
+          easeInOutQuint(clamp01(rawT / 0.56)),
+        );
         rightPitch = -Math.PI / 2;
-        rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.25) / 0.75)));
+        rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
         break;
       case 'fb_open_retract_left':
         cubePos.x = wp.cubeTopPos.x;
@@ -1260,8 +1382,12 @@ export class RoboticsChoreography {
         rightPos.x = wp.rightTopContact.x;
         rightPos.y = wp.rightTopContact.y;
         rightPitch = -Math.PI / 2;
-        leftJawOpen = easeInOutCubic(clamp01(rawT / 0.55));
-        leftPos.x = lerp(leftAtCubeX, leftClearX, tQuint);
+        leftJawOpen = easeInOutCubic(clamp01(rawT / 0.42));
+        leftPos.x = lerp(
+          leftAtCubeX,
+          leftClearX,
+          easeInOutQuint(clamp01((rawT - 0.22) / 0.78)),
+        );
         leftPos.y = cubePos.y;
         break;
       case 'fb_present_cube':
@@ -1284,18 +1410,70 @@ export class RoboticsChoreography {
         rightPos.y = wp.rightTopContact.y;
         rightPitch = -Math.PI / 2;
         rightRoll = -presentYaw;
-        leftPos.x = lerp(leftClearX, leftAtCubeX, easeInOutQuint(clamp01(rawT / 0.6)));
+        leftPos.x = lerp(
+          leftClearX,
+          leftAtCubeX,
+          easeInOutQuint(clamp01(rawT / 0.58)),
+        );
         leftPos.y = cubePos.y;
-        leftJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.35) / 0.65)));
+        leftJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
+        break;
+      case 'fb_right_release_top_unwind':
+        // Right opens & lifts straight UP clear above cube while Left stabilizes -X
+        cubePos.x = wp.cubeTopPos.x;
+        cubePos.y = wp.cubeTopPos.y;
+        cubeYaw = presentYaw;
+        leftPos.x = leftAtCubeX;
+        leftPos.y = cubePos.y;
+        rightPos.x = wp.rightTopContact.x;
+        rightPos.y = lerp(
+          wp.rightTopContact.y,
+          wp.rightTopClear.y,
+          easeInOutQuint(clamp01((rawT - 0.35) / 0.65)),
+        );
+        rightPitch = -Math.PI / 2;
+        rightRoll = -presentYaw;
+        rightJawOpen = easeInOutCubic(clamp01(rawT / 0.48));
+        break;
+      case 'fb_right_unwind_top':
+        // Right unwinds wrist roll back to 0 (±Z jaws) in open air above cube!
+        cubePos.x = wp.cubeTopPos.x;
+        cubePos.y = wp.cubeTopPos.y;
+        cubeYaw = presentYaw;
+        leftPos.x = leftAtCubeX;
+        leftPos.y = cubePos.y;
+        rightPos.x = wp.rightTopClear.x;
+        rightPos.y = wp.rightTopClear.y;
+        rightPitch = -Math.PI / 2;
+        rightRoll = lerp(-presentYaw, 0, tQuint);
+        rightJawOpen = 1;
+        break;
+      case 'fb_right_reclamp_top':
+        // Right descends straight down onto +Y middle slice (X ∈ [-22mm, +22mm]) -> 57mm clear of Left!
+        cubePos.x = wp.cubeTopPos.x;
+        cubePos.y = wp.cubeTopPos.y;
+        cubeYaw = presentYaw;
+        leftPos.x = leftAtCubeX;
+        leftPos.y = cubePos.y;
+        rightPos.x = wp.rightTopContact.x;
+        rightPos.y = lerp(
+          wp.rightTopClear.y,
+          wp.rightTopContact.y,
+          easeInOutQuint(clamp01(rawT / 0.56)),
+        );
+        rightPitch = -Math.PI / 2;
+        rightRoll = 0;
+        rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
         break;
       case 'fb_twist':
+        // Left twists presented F/B outer layer 90deg; Right holds stationary middle slice with 57mm gap!
         cubePos.x = wp.cubeTopPos.x;
         cubePos.y = wp.cubeTopPos.y;
         cubeYaw = presentYaw;
         rightPos.x = wp.rightTopContact.x;
         rightPos.y = wp.rightTopContact.y;
         rightPitch = -Math.PI / 2;
-        rightRoll = -presentYaw;
+        rightRoll = 0;
         leftPos.x = leftAtCubeX;
         leftPos.y = cubePos.y;
         leftRoll = leftTwistTarget * tQuint;
@@ -1305,31 +1483,47 @@ export class RoboticsChoreography {
           easedProgress: tQuint,
         };
         break;
-      case 'fb_open_unwind_retract_left':
+      case 'fb_open_retract_left_post':
+        // Left opens & retracts straight outward well clear of cube before unwinding!
         cubePos.x = wp.cubeTopPos.x;
         cubePos.y = wp.cubeTopPos.y;
         cubeYaw = presentYaw;
         rightPos.x = wp.rightTopContact.x;
         rightPos.y = wp.rightTopContact.y;
         rightPitch = -Math.PI / 2;
-        rightRoll = -presentYaw;
-        leftJawOpen = easeInOutCubic(clamp01(rawT / 0.45));
-        leftPos.x = lerp(leftAtCubeX, leftClearX, tQuint);
-        leftPos.y = cubePos.y;
-        leftRoll = lerp(
-          leftTwistTarget,
-          0,
+        rightRoll = 0;
+        leftJawOpen = easeInOutCubic(clamp01(rawT / 0.42));
+        leftPos.x = lerp(
+          leftAtCubeX,
+          leftClearX,
           easeInOutQuint(clamp01((rawT - 0.25) / 0.75)),
         );
+        leftPos.y = cubePos.y;
+        leftRoll = leftTwistTarget;
+        break;
+      case 'fb_unwind_left_clear':
+        // Left unwinds wrist roll back to 0 in open air at leftClearX (zero corner clip!)
+        cubePos.x = wp.cubeTopPos.x;
+        cubePos.y = wp.cubeTopPos.y;
+        cubeYaw = presentYaw;
+        rightPos.x = wp.rightTopContact.x;
+        rightPos.y = wp.rightTopContact.y;
+        rightPitch = -Math.PI / 2;
+        rightRoll = 0;
+        leftPos.x = leftClearX;
+        leftPos.y = cubePos.y;
+        leftJawOpen = 1;
+        leftRoll = lerp(leftTwistTarget, 0, tQuint);
         break;
       case 'fb_restore_cube':
+        // Right restores cube upright (cubeYaw: presentYaw -> 0 by rolling rightRoll: 0 -> +presentYaw)
         cubePos.x = wp.cubeTopPos.x;
         cubePos.y = wp.cubeTopPos.y;
         cubeYaw = lerp(presentYaw, 0, tQuint);
         rightPos.x = wp.rightTopContact.x;
         rightPos.y = wp.rightTopContact.y;
         rightPitch = -Math.PI / 2;
-        rightRoll = -cubeYaw;
+        rightRoll = presentYaw * tQuint;
         leftPos.x = leftClearX;
         leftPos.y = cubePos.y;
         leftJawOpen = 1;
@@ -1340,9 +1534,14 @@ export class RoboticsChoreography {
         rightPos.x = wp.rightTopContact.x;
         rightPos.y = wp.rightTopContact.y;
         rightPitch = -Math.PI / 2;
-        leftPos.x = lerp(leftClearX, leftAtCubeX, easeInOutQuint(clamp01(rawT / 0.6)));
+        rightRoll = presentYaw;
+        leftPos.x = lerp(
+          leftClearX,
+          leftAtCubeX,
+          easeInOutQuint(clamp01(rawT / 0.58)),
+        );
         leftPos.y = cubePos.y;
-        leftJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.35) / 0.65)));
+        leftJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
         break;
       case 'fb_release_top':
         cubePos.x = wp.cubeTopPos.x;
@@ -1350,9 +1549,14 @@ export class RoboticsChoreography {
         leftPos.x = leftAtCubeX;
         leftPos.y = cubePos.y;
         rightPos.x = wp.rightTopContact.x;
-        rightPos.y = lerp(wp.rightTopContact.y, wp.rightTopClear.y, easeInOutCubic(clamp01((rawT - 0.35) / 0.65)));
+        rightPos.y = lerp(
+          wp.rightTopContact.y,
+          wp.rightTopClear.y,
+          easeInOutQuint(clamp01((rawT - 0.35) / 0.65)),
+        );
         rightPitch = -Math.PI / 2;
-        rightJawOpen = easeInOutCubic(clamp01(rawT / 0.6));
+        rightRoll = presentYaw;
+        rightJawOpen = easeInOutCubic(clamp01(rawT / 0.48));
         break;
       case 'fb_right_to_side':
         cubePos.x = lerp(wp.cubeTopPos.x, 0, tQuint);
@@ -1368,11 +1572,16 @@ export class RoboticsChoreography {
           rightPos,
         );
         rightPitch = lerp(-Math.PI / 2, 0, easeInOutCubic(clamp01(rawT / 0.86)));
+        rightRoll = lerp(presentYaw, 0, tQuint);
         rightJawOpen = 1;
         break;
       case 'fb_reclamp_right':
-        rightPos.x = lerp(wp.rightSideClear.x, wp.rightClampHold.x, easeInOutCubic(clamp01(rawT / 0.55)));
-        rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.3) / 0.7)));
+        rightPos.x = lerp(
+          wp.rightSideClear.x,
+          wp.rightClampHold.x,
+          easeInOutQuint(clamp01(rawT / 0.56)),
+        );
+        rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
         break;
     }
 
@@ -1380,6 +1589,7 @@ export class RoboticsChoreography {
       leftPos,
       rightPos,
       cubePos,
+      cubePitch,
       cubeYaw,
       leftPitch,
       rightPitch,

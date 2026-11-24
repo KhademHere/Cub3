@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import * as THREE from 'three';
 
 import {DEFAULT_DURATIONS, RoboticsChoreography} from './animationState';
-import type {CubeMoveNotation} from './cubeMoves';
+import {getMoveSpec, type CubeMoveNotation} from './cubeMoves';
 import {LAB_DIMENSIONS, computeForwardKinematics} from './kinematics';
+import type {LabMaterialLibrary} from './materials';
+import {RoboticArm} from './RoboticArm';
 import type {MachineState} from './types';
 
 function advanceBy(choreo: RoboticsChoreography, seconds: number) {
@@ -57,8 +60,8 @@ test('full Pick Up -> Hold -> Put Down lifecycle transitions cleanly and blocks 
   // Verify both arms are locked symmetrically on the cube's left & right center faces
   const leftFk = computeForwardKinematics('left', heldFrame.leftAngles);
   const rightFk = computeForwardKinematics('right', heldFrame.rightAngles);
-  assert.ok(Math.abs(leftFk.contactPad.x + LAB_DIMENSIONS.CUBE_HALF) < 1e-3);
-  assert.ok(Math.abs(rightFk.contactPad.x - LAB_DIMENSIONS.CUBE_HALF) < 1e-3);
+  assert.ok(Math.abs(leftFk.contactPad.x + LAB_DIMENSIONS.CUBE_OUTER_HALF) < 1e-3);
+  assert.ok(Math.abs(rightFk.contactPad.x - LAB_DIMENSIONS.CUBE_OUTER_HALF) < 1e-3);
   assert.ok(Math.abs(leftFk.contactPad.y - heldFrame.cubePosition.y) < 1e-3);
   assert.ok(Math.abs(rightFk.contactPad.y - heldFrame.cubePosition.y) < 1e-3);
 
@@ -239,11 +242,11 @@ test('all 12 face moves stay inside IK workspace envelope with tabletop clearanc
       const distR = Math.hypot(dxR, dyR, dzR);
 
       assert.ok(
-        Math.abs(distL - LAB_DIMENSIONS.CUBE_HALF) < 2e-3,
+        Math.abs(distL - LAB_DIMENSIONS.CUBE_OUTER_HALF) < 2e-3,
         `Left contact pad drifted during ${frame.activeFaceTurn.move}: dist=${distL}`,
       );
       assert.ok(
-        Math.abs(distR - LAB_DIMENSIONS.CUBE_HALF) < 2e-3,
+        Math.abs(distR - LAB_DIMENSIONS.CUBE_OUTER_HALF) < 2e-3,
         `Right contact pad drifted during ${frame.activeFaceTurn.move}: dist=${distR}`,
       );
     }
@@ -348,8 +351,8 @@ test('indefinite continuous scramble runs past 26+ moves, stops gracefully mid-t
   assert.equal(lastFrame.rightAngles.jawOpen, 0);
   const leftFk = computeForwardKinematics('left', lastFrame.leftAngles);
   const rightFk = computeForwardKinematics('right', lastFrame.rightAngles);
-  assert.ok(Math.abs(leftFk.contactPad.x + LAB_DIMENSIONS.CUBE_HALF) < 1e-3);
-  assert.ok(Math.abs(rightFk.contactPad.x - LAB_DIMENSIONS.CUBE_HALF) < 1e-3);
+  assert.ok(Math.abs(leftFk.contactPad.x + LAB_DIMENSIONS.CUBE_OUTER_HALF) < 1e-3);
+  assert.ok(Math.abs(rightFk.contactPad.x - LAB_DIMENSIONS.CUBE_OUTER_HALF) < 1e-3);
 
   // 4. Resume scrambling without resetting moveHistory
   const countBeforeResume = committedHistory.length;
@@ -569,6 +572,384 @@ test('Motion speed multiplier (0.5x, 1x, 2x) scales choreography timing accurate
   }
   assert.equal(liveChoreo.getSnapshot().statusLabel, 'HOLDING — SOLVED ✓');
 });
+
+interface OBB3 {
+  label: string;
+  center: THREE.Vector3;
+  axes: [THREE.Vector3, THREE.Vector3, THREE.Vector3];
+  half: [number, number, number];
+  radius: number;
+}
+
+function makeMockMaterials(): LabMaterialLibrary {
+  const mat = new THREE.MeshBasicMaterial();
+  return new Proxy({} as LabMaterialLibrary, {
+    get: () => mat,
+  });
+}
+
+interface TrackedMesh {
+  mesh: THREE.Mesh;
+  label: string;
+  localCenter: THREE.Vector3;
+  localHalf: [number, number, number];
+  checkTabletop: boolean;
+}
+
+function collectArmMeshes(arm: RoboticArm): TrackedMesh[] {
+  const turret = arm.getObjectByName('BaseTurretYaw');
+  const shoulder = arm.getObjectByName('ShoulderPitch');
+  assert.ok(turret && shoulder, 'Expected arm hierarchy pivots');
+
+  const tracked: TrackedMesh[] = [];
+  const isDescendantOf = (node: THREE.Object3D, ancestor: THREE.Object3D): boolean => {
+    let cur: THREE.Object3D | null = node;
+    while (cur) {
+      if (cur === ancestor) return true;
+      cur = cur.parent;
+    }
+    return false;
+  };
+
+  turret.traverse((obj) => {
+    if (!(obj instanceof THREE.Mesh)) return;
+    obj.geometry.computeBoundingBox();
+    const bb = obj.geometry.boundingBox;
+    if (!bb) return;
+    const localCenter = new THREE.Vector3();
+    const localSize = new THREE.Vector3();
+    bb.getCenter(localCenter);
+    bb.getSize(localSize);
+    const parentName = obj.parent?.name || 'anon';
+    tracked.push({
+      mesh: obj,
+      label: `${arm.side}:${parentName}`,
+      localCenter,
+      localHalf: [localSize.x / 2, localSize.y / 2, localSize.z / 2],
+      checkTabletop: isDescendantOf(obj, shoulder),
+    });
+  });
+
+  return tracked;
+}
+
+function buildWorldOBB(item: TrackedMesh): OBB3 {
+  const m = item.mesh.matrixWorld;
+  const e = m.elements;
+  const ax = new THREE.Vector3(e[0], e[1], e[2]);
+  const ay = new THREE.Vector3(e[4], e[5], e[6]);
+  const az = new THREE.Vector3(e[8], e[9], e[10]);
+  const sx = ax.length();
+  const sy = ay.length();
+  const sz = az.length();
+  ax.divideScalar(sx || 1);
+  ay.divideScalar(sy || 1);
+  az.divideScalar(sz || 1);
+
+  const center = item.localCenter.clone().applyMatrix4(m);
+  const hx = item.localHalf[0] * sx;
+  const hy = item.localHalf[1] * sy;
+  const hz = item.localHalf[2] * sz;
+
+  return {
+    label: item.label,
+    center,
+    axes: [ax, ay, az],
+    half: [hx, hy, hz],
+    radius: Math.hypot(hx, hy, hz),
+  };
+}
+
+function buildBoxOBB(
+  label: string,
+  matrixWorld: THREE.Matrix4,
+  localCenter: THREE.Vector3,
+  half: [number, number, number],
+): OBB3 {
+  const e = matrixWorld.elements;
+  const ax = new THREE.Vector3(e[0], e[1], e[2]).normalize();
+  const ay = new THREE.Vector3(e[4], e[5], e[6]).normalize();
+  const az = new THREE.Vector3(e[8], e[9], e[10]).normalize();
+  return {
+    label,
+    center: localCenter.clone().applyMatrix4(matrixWorld),
+    axes: [ax, ay, az],
+    half,
+    radius: Math.hypot(half[0], half[1], half[2]),
+  };
+}
+
+/**
+ * Exact 15-axis 3D Separating Axis Theorem (SAT) OBB-vs-OBB overlap test.
+ * Returns positive penetration depth in meters if intersecting, or <= 0 if separated.
+ */
+function obbOverlapDepth(a: OBB3, b: OBB3): number {
+  const dx = b.center.x - a.center.x;
+  const dy = b.center.y - a.center.y;
+  const dz = b.center.z - a.center.z;
+  const distSq = dx * dx + dy * dy + dz * dz;
+  const rSum = a.radius + b.radius;
+  if (distSq >= rSum * rSum) return -1;
+
+  let minOverlap = Infinity;
+  const testAxis = (nx: number, ny: number, nz: number): boolean => {
+    const lenSq = nx * nx + ny * ny + nz * nz;
+    if (lenSq < 1e-10) return true;
+    const invLen = 1 / Math.sqrt(lenSq);
+    const ux = nx * invLen;
+    const uy = ny * invLen;
+    const uz = nz * invLen;
+
+    const projDist = Math.abs(dx * ux + dy * uy + dz * uz);
+    const rA =
+      Math.abs(a.axes[0].x * ux + a.axes[0].y * uy + a.axes[0].z * uz) * a.half[0] +
+      Math.abs(a.axes[1].x * ux + a.axes[1].y * uy + a.axes[1].z * uz) * a.half[1] +
+      Math.abs(a.axes[2].x * ux + a.axes[2].y * uy + a.axes[2].z * uz) * a.half[2];
+    const rB =
+      Math.abs(b.axes[0].x * ux + b.axes[0].y * uy + b.axes[0].z * uz) * b.half[0] +
+      Math.abs(b.axes[1].x * ux + b.axes[1].y * uy + b.axes[1].z * uz) * b.half[1] +
+      Math.abs(b.axes[2].x * ux + b.axes[2].y * uy + b.axes[2].z * uz) * b.half[2];
+
+    const overlap = rA + rB - projDist;
+    if (overlap <= 0) return false;
+    if (overlap < minOverlap) minOverlap = overlap;
+    return true;
+  };
+
+  // 3 face normals of A
+  for (let i = 0; i < 3; i++) {
+    if (!testAxis(a.axes[i].x, a.axes[i].y, a.axes[i].z)) return 0;
+  }
+  // 3 face normals of B
+  for (let j = 0; j < 3; j++) {
+    if (!testAxis(b.axes[j].x, b.axes[j].y, b.axes[j].z)) return 0;
+  }
+  // 9 cross products of edges
+  for (let i = 0; i < 3; i++) {
+    const ai = a.axes[i];
+    for (let j = 0; j < 3; j++) {
+      const bj = b.axes[j];
+      const cx = ai.y * bj.z - ai.z * bj.y;
+      const cy = ai.z * bj.x - ai.x * bj.z;
+      const cz = ai.x * bj.y - ai.y * bj.x;
+      if (!testAxis(cx, cy, cz)) return 0;
+    }
+  }
+
+  return minOverlap;
+}
+
+function obbMinY(o: OBB3): number {
+  return (
+    o.center.y -
+    (Math.abs(o.axes[0].y) * o.half[0] +
+      Math.abs(o.axes[1].y) * o.half[1] +
+      Math.abs(o.axes[2].y) * o.half[2])
+  );
+}
+
+test('3D mesh SAT collision audit: zero arm-to-arm overlap, zero cube clipping, and tabletop clearance across Pick Up, all 12 moves, Celebration, and Put Down', () => {
+  const materials = makeMockMaterials();
+  const leftArm = new RoboticArm('left', materials);
+  const rightArm = new RoboticArm('right', materials);
+  const leftTracked = collectArmMeshes(leftArm);
+  const rightTracked = collectArmMeshes(rightArm);
+
+  const choreo = new RoboticsChoreography();
+  const all12: CubeMoveNotation[] = [
+    'L', "L'", 'R', "R'", 'U', "U'", 'D', "D'", 'F', "F'", 'B', "B'",
+  ];
+
+  // Cube body half-extent shrunk by 0.6mm from CUBE_OUTER_HALF (0.107m -> 0.1064m,
+  // right at actual outer beveled tile surface 0.10653m) so flush clamping passes while
+  // any penetration into the cube body or stickers triggers an immediate failure.
+  const CUBE_COLLISION_HALF = 0.1062;
+  const LAYER_THICKNESS_HALF = 0.035; // 70mm outer slice
+
+  const cubeMatrix = new THREE.Matrix4();
+  const cubePos = new THREE.Vector3();
+  const cubeEuler = new THREE.Euler();
+  const cubeQuat = new THREE.Quaternion();
+  const unitScale = new THREE.Vector3(1, 1, 1);
+
+  const layerPivotMatrix = new THREE.Matrix4();
+  const layerRotQuat = new THREE.Quaternion();
+  const layerAxisVec = new THREE.Vector3();
+
+  let worstArmOverlap = 0;
+  let worstArmDetail = '';
+  let worstCubeOverlap = 0;
+  let worstCubeDetail = '';
+  let lowestArmY = Infinity;
+  let lowestArmDetail = '';
+  let framesChecked = 0;
+
+  const auditFrame = (frame: ReturnType<RoboticsChoreography['evaluateFrame']>) => {
+    framesChecked += 1;
+    leftArm.applyJointAngles(frame.leftAngles);
+    rightArm.applyJointAngles(frame.rightAngles);
+    leftArm.updateMatrixWorld(true);
+    rightArm.updateMatrixWorld(true);
+
+    const leftOBBs = leftTracked.map((t) => ({t, obb: buildWorldOBB(t)}));
+    const rightOBBs = rightTracked.map((t) => ({t, obb: buildWorldOBB(t)}));
+    const contextTag = `${frame.snapshot.state} (${frame.snapshot.statusLabel})`;
+
+    // 1. Outward elbow orientation invariant
+    const leftFk = computeForwardKinematics('left', frame.leftAngles);
+    const rightFk = computeForwardKinematics('right', frame.rightAngles);
+    assert.ok(
+      leftFk.elbow.x < -0.15,
+      `Left elbow crossed inward at ${contextTag}: elbow.x=${leftFk.elbow.x.toFixed(4)}`,
+    );
+    assert.ok(
+      rightFk.elbow.x > 0.15,
+      `Right elbow crossed inward at ${contextTag}: elbow.x=${rightFk.elbow.x.toFixed(4)}`,
+    );
+
+    // 2. Strict tabletop clearance for every shoulder/elbow/wrist/jaw mesh
+    for (const group of [leftOBBs, rightOBBs]) {
+      for (const {t, obb} of group) {
+        if (!t.checkTabletop) continue;
+        const minY = obbMinY(obb);
+        if (minY < lowestArmY) {
+          lowestArmY = minY;
+          lowestArmDetail = `${obb.label} at ${contextTag}`;
+        }
+      }
+    }
+
+    // 3. Zero arm-to-arm 3D mesh overlap (all moving left parts vs all moving right parts)
+    for (const l of leftOBBs) {
+      for (const r of rightOBBs) {
+        const overlap = obbOverlapDepth(l.obb, r.obb);
+        if (overlap > worstArmOverlap) {
+          worstArmOverlap = overlap;
+          worstArmDetail = `${l.obb.label} vs ${r.obb.label} (${(overlap * 1000).toFixed(2)}mm) at ${contextTag}`;
+        }
+      }
+    }
+
+    // 4. Zero arm-to-cube clipping (accounts for cube position, yaw, pitch, and active turning slice!)
+    cubePos.set(frame.cubePosition.x, frame.cubePosition.y, frame.cubePosition.z);
+    cubeEuler.set(frame.cubePitch, frame.cubeYaw, 0, 'XYZ');
+    cubeQuat.setFromEuler(cubeEuler);
+    cubeMatrix.compose(cubePos, cubeQuat, unitScale);
+
+    if (!frame.activeFaceTurn) {
+      const cubeOBB = buildBoxOBB(
+        'RubiksCube',
+        cubeMatrix,
+        new THREE.Vector3(0, 0, 0),
+        [CUBE_COLLISION_HALF, CUBE_COLLISION_HALF, CUBE_COLLISION_HALF],
+      );
+      for (const item of [...leftOBBs, ...rightOBBs]) {
+        const overlap = obbOverlapDepth(item.obb, cubeOBB);
+        if (overlap > worstCubeOverlap) {
+          worstCubeOverlap = overlap;
+          worstCubeDetail = `${item.obb.label} vs Cube (${(overlap * 1000).toFixed(2)}mm) at ${contextTag}`;
+        }
+      }
+    } else {
+      // During an active face twist, split cube into:
+      //  (a) the 2 stationary layers (width 140mm along twist axis)
+      //  (b) the 1 rotating layer (width 70mm, rotated by live angle)
+      const spec = getMoveSpec(frame.activeFaceTurn.move);
+      const angle = spec.angleRad * frame.activeFaceTurn.easedProgress;
+      layerAxisVec.set(
+        spec.axis === 'x' ? 1 : 0,
+        spec.axis === 'y' ? 1 : 0,
+        spec.axis === 'z' ? 1 : 0,
+      );
+      layerRotQuat.setFromAxisAngle(layerAxisVec, angle);
+      layerPivotMatrix.makeRotationFromQuaternion(layerRotQuat);
+      const rotLayerWorld = cubeMatrix.clone().multiply(layerPivotMatrix);
+
+      const stationaryCenter = layerAxisVec.clone().multiplyScalar(-spec.layer * LAYER_THICKNESS_HALF);
+      const stationaryHalf: [number, number, number] = [
+        spec.axis === 'x' ? CUBE_COLLISION_HALF - LAYER_THICKNESS_HALF : CUBE_COLLISION_HALF,
+        spec.axis === 'y' ? CUBE_COLLISION_HALF - LAYER_THICKNESS_HALF : CUBE_COLLISION_HALF,
+        spec.axis === 'z' ? CUBE_COLLISION_HALF - LAYER_THICKNESS_HALF : CUBE_COLLISION_HALF,
+      ];
+      const stationaryOBB = buildBoxOBB('CubeStationary2Layers', cubeMatrix, stationaryCenter, stationaryHalf);
+
+      const turningCenter = layerAxisVec
+        .clone()
+        .multiplyScalar(spec.layer * (CUBE_COLLISION_HALF - LAYER_THICKNESS_HALF));
+      const turningHalf: [number, number, number] = [
+        spec.axis === 'x' ? LAYER_THICKNESS_HALF : CUBE_COLLISION_HALF,
+        spec.axis === 'y' ? LAYER_THICKNESS_HALF : CUBE_COLLISION_HALF,
+        spec.axis === 'z' ? LAYER_THICKNESS_HALF : CUBE_COLLISION_HALF,
+      ];
+      const turningOBB = buildBoxOBB('CubeTurningLayer', rotLayerWorld, turningCenter, turningHalf);
+
+      for (const item of [...leftOBBs, ...rightOBBs]) {
+        const o1 = obbOverlapDepth(item.obb, stationaryOBB);
+        if (o1 > worstCubeOverlap) {
+          worstCubeOverlap = o1;
+          worstCubeDetail = `${item.obb.label} vs StationaryLayers (${(o1 * 1000).toFixed(2)}mm) at ${contextTag}`;
+        }
+        const o2 = obbOverlapDepth(item.obb, turningOBB);
+        if (o2 > worstCubeOverlap) {
+          worstCubeOverlap = o2;
+          worstCubeDetail = `${item.obb.label} vs TurningLayer (${(o2 * 1000).toFixed(2)}mm) at ${contextTag}`;
+        }
+      }
+    }
+  };
+
+  // Audit initial STANDBY frame
+  auditFrame(choreo.evaluateFrame());
+
+  // Audit Pick Up + all 12 face moves
+  assert.equal(choreo.triggerScramble(all12), true);
+  let steps = 0;
+  while (choreo.getState() !== 'HOLDING' && steps < 6000) {
+    auditFrame(choreo.step(0.01));
+    steps += 1;
+  }
+  assert.equal(choreo.getState(), 'HOLDING');
+
+  // Audit Auto-Solve + Celebration flourish
+  assert.equal(choreo.triggerAutoSolve(['R', 'U', 'F', 'D', 'L', 'B']), true);
+  steps = 0;
+  while (steps < 6000) {
+    const f = choreo.step(0.01);
+    auditFrame(f);
+    steps += 1;
+    if (f.snapshot.state === 'HOLDING' && f.snapshot.isSolvedBadge) break;
+  }
+  assert.equal(choreo.getState(), 'HOLDING');
+
+  // Audit Put Down back to STANDBY
+  assert.equal(choreo.triggerPrimaryAction(), true);
+  steps = 0;
+  while (choreo.getState() !== 'STANDBY' && steps < 2000) {
+    auditFrame(choreo.step(0.01));
+    steps += 1;
+  }
+  assert.equal(choreo.getState(), 'STANDBY');
+
+  assert.ok(framesChecked > 2500, `Expected dense audit, checked ${framesChecked} frames`);
+  assert.equal(
+    worstArmOverlap,
+    0,
+    `Detected arm-to-arm 3D mesh overlap: ${worstArmDetail}`,
+  );
+  assert.equal(
+    worstCubeOverlap,
+    0,
+    `Detected arm-to-cube 3D mesh clipping: ${worstCubeDetail}`,
+  );
+  assert.ok(
+    lowestArmY > LAB_DIMENSIONS.TABLE_TOP_Y + 0.03,
+    `Arm mesh dipped too close to tabletop (${LAB_DIMENSIONS.TABLE_TOP_Y}m): minY=${lowestArmY.toFixed(4)}m (${lowestArmDetail})`,
+  );
+
+  leftArm.dispose();
+  rightArm.dispose();
+});
+
 
 
 

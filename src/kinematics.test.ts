@@ -30,7 +30,7 @@ test('easing curves hit exact endpoints and stay monotonic', () => {
 
 test('analytical IK + FK round-trip matches exact contact targets for both arms', () => {
   const z = LAB_DIMENSIONS.TABLE_CENTER_Z;
-  const half = LAB_DIMENSIONS.CUBE_HALF;
+  const half = LAB_DIMENSIONS.CUBE_OUTER_HALF;
 
   const testCases = [
     {
@@ -87,17 +87,32 @@ test('analytical IK + FK round-trip matches exact contact targets for both arms'
       err < 1e-4,
       `${tc.name}: expected FK contact error < 1e-4m, got ${err}`,
     );
-    // Elbow must always stay above the tabletop (elbow-up industrial posture)
+    // Elbow must always stay above the tabletop and bow outward away from center
     assert.ok(
       fk.elbow.y > LAB_DIMENSIONS.TABLE_TOP_Y + 0.2,
       `${tc.name}: expected elbow-up posture above table, got y=${fk.elbow.y}`,
     );
+    if (tc.side === 'left') {
+      assert.ok(
+        fk.elbow.x < -0.15,
+        `${tc.name}: expected left elbow outward (x < -0.15), got x=${fk.elbow.x}`,
+      );
+    } else {
+      assert.ok(
+        fk.elbow.x > 0.15,
+        `${tc.name}: expected right elbow outward (x > 0.15), got x=${fk.elbow.x}`,
+      );
+    }
   }
 });
 
-test('parallel jaw separation makes exact cube contact at jawOpen=0 and clears cube when open', () => {
-  assert.equal(getJawInnerSeparation(0), LAB_DIMENSIONS.CUBE_SIZE);
-  assert.ok(getJawInnerSeparation(1) > LAB_DIMENSIONS.CUBE_SIZE + 0.06);
+test('parallel jaw separation makes exact cube contact at jawOpen=0 and clears cube diagonal when open', () => {
+  assert.equal(getJawInnerSeparation(0), LAB_DIMENSIONS.CUBE_OUTER_SIZE);
+  const cubeDiagonal = LAB_DIMENSIONS.CUBE_OUTER_SIZE * Math.SQRT2;
+  assert.ok(
+    getJawInnerSeparation(1) > cubeDiagonal,
+    `Expected open jaw separation (${getJawInnerSeparation(1)}) > cube diagonal (${cubeDiagonal})`,
+  );
 });
 
 test('cubic Bezier interpolation starts and ends at anchor points', () => {

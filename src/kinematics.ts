@@ -9,14 +9,21 @@ export const LAB_DIMENSIONS = {
   TABLE_TOP_Y: 0.85,
   /** Z center of the workbench pad in XR world space (in front of user origin). */
   TABLE_CENTER_Z: -1.05,
-  /** Overall side length of the 3x3x3 Rubik's Cube (21 cm display scale). */
+  /** Nominal inner body side length of the 3x3x3 Rubik's Cube (21 cm display scale). */
   CUBE_SIZE: 0.21,
-  /** Half side length of the Rubik's Cube. */
+  /** Half nominal body side length of the Rubik's Cube. */
   CUBE_HALF: 0.105,
+  /**
+   * Exact outer half-width including extruded glossy sticker tiles + bevel (0.10653m)
+   * plus a 0.47mm anti-z-fighting epsilon so clamped rubber pads sit mathematically flush.
+   */
+  CUBE_OUTER_HALF: 0.107,
+  /** Exact assembled outer cube width across opposing tile surfaces. */
+  CUBE_OUTER_SIZE: 0.214,
   /** Slight height of the recessed pad floor above the tabletop surface. */
   PAD_SURFACE_OFFSET: 0.003,
-  /** Cube center Y when resting neatly on the center pad. */
-  CUBE_REST_Y: 0.85 + 0.003 + 0.105,
+  /** Cube center Y when resting neatly on the center pad (tiles flush on pad). */
+  CUBE_REST_Y: 0.85 + 0.003 + 0.107,
   /** Cube center Y when lifted to the central hovering "Ready Position". */
   CUBE_HOLD_Y: 0.85 + 0.36,
   /** Symmetrical X offset of the left (-X) and right (+X) arm base turrets. */
@@ -24,15 +31,15 @@ export const LAB_DIMENSIONS = {
   /** Height from workbench tabletop to the shoulder pitch pivot axis. */
   SHOULDER_HEIGHT: 0.16,
   /** Length of the heavy lower arm boom (shoulder axis to elbow axis). */
-  LOWER_BOOM_LENGTH: 0.34,
+  LOWER_BOOM_LENGTH: 0.36,
   /** Length of the forearm strut (elbow axis to wrist pitch axis). */
-  FOREARM_LENGTH: 0.30,
+  FOREARM_LENGTH: 0.32,
   /** Distance from wrist pitch pivot to the gripper's center contact plane along inward axis. */
   GRIPPER_REACH: 0.118,
-  /** Extra outward clearance (meters) per jaw finger when jawOpen = 1. */
-  JAW_MAX_OPEN_OFFSET: 0.044,
-  /** Depth that each jaw finger reaches forward past the contact plane to cradle the cube. */
-  JAW_FINGER_OVERLAP: 0.042,
+  /** Extra outward clearance (meters) per jaw finger when jawOpen = 1 (clears cube diagonal). */
+  JAW_MAX_OPEN_OFFSET: 0.048,
+  /** Depth that each jaw finger reaches inward past the contact plane (strictly within 70mm outer layer). */
+  JAW_FINGER_OVERLAP: 0.028,
 } as const;
 
 export function clamp01(t: number): number {
@@ -85,11 +92,14 @@ export function evalCubicBezier3(
 /**
  * Returns the inner face separation between the two parallel rubberized jaw pads
  * for a given normalized jawOpen ∈ [0, 1].
- * At jawOpen = 0, separation equals CUBE_SIZE exactly (exact contact, zero clipping).
+ * At jawOpen = 0, separation equals CUBE_OUTER_SIZE exactly (flush on outer tile faces, zero clipping).
  */
 export function getJawInnerSeparation(jawOpen: number): number {
   const open = clamp01(jawOpen);
-  return LAB_DIMENSIONS.CUBE_SIZE + open * 2 * LAB_DIMENSIONS.JAW_MAX_OPEN_OFFSET;
+  return (
+    LAB_DIMENSIONS.CUBE_OUTER_SIZE +
+    open * 2 * LAB_DIMENSIONS.JAW_MAX_OPEN_OFFSET
+  );
 }
 
 /**

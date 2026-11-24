@@ -371,19 +371,21 @@ export class RoboticArm extends THREE.Group {
     );
 
     // Parallel Linear Rail Block (crossbar spanning along Z where the 2 jaws slide)
+    // Compact 40mm height keeps the stabilizing gripper strictly within the 70mm center slice!
     const railX = s * (Lg - 0.022);
-    const railSpanZ = LAB_DIMENSIONS.CUBE_SIZE + LAB_DIMENSIONS.JAW_MAX_OPEN_OFFSET * 2 + 0.055;
+    const railSpanZ =
+      LAB_DIMENSIONS.CUBE_OUTER_SIZE + LAB_DIMENSIONS.JAW_MAX_OPEN_OFFSET * 2 + 0.036;
 
-    const railBodyGeo = this.trackGeo(new THREE.BoxGeometry(0.034, 0.046, railSpanZ));
+    const railBodyGeo = this.trackGeo(new THREE.BoxGeometry(0.032, 0.04, railSpanZ));
     this.addMesh(this.wristRollPivot, railBodyGeo, materials.darkAnodized, [railX, 0, 0]);
 
     // Twin precision chrome guide rods along Z inside the rail block
-    const guideRodGeo = this.trackGeo(new THREE.CylinderGeometry(0.0042, 0.0042, railSpanZ + 0.008, 12));
+    const guideRodGeo = this.trackGeo(new THREE.CylinderGeometry(0.004, 0.004, railSpanZ + 0.006, 12));
     this.addMesh(
       this.wristRollPivot,
       guideRodGeo,
       materials.machinedSteel,
-      [railX + s * 0.012, 0.014, 0],
+      [railX + s * 0.011, 0.012, 0],
       [Math.PI / 2, 0, 0],
       false,
     );
@@ -391,15 +393,15 @@ export class RoboticArm extends THREE.Group {
       this.wristRollPivot,
       guideRodGeo,
       materials.machinedSteel,
-      [railX + s * 0.012, -0.014, 0],
+      [railX + s * 0.011, -0.012, 0],
       [Math.PI / 2, 0, 0],
       false,
     );
 
-    // Center registration rubber bumper facing the cube's left/right center cubie face
-    // Its inner contact face sits precisely at x = s * Lg (zero clipping!)
+    // Center registration rubber bumper facing the cube's center cubie face
+    // Its inner contact face sits precisely at x = s * Lg (flush on outer sticker plane, zero clipping!)
     const centerPadThickness = 0.006;
-    const centerPadGeo = this.trackGeo(new THREE.BoxGeometry(centerPadThickness, 0.044, 0.044));
+    const centerPadGeo = this.trackGeo(new THREE.BoxGeometry(centerPadThickness, 0.04, 0.04));
     this.addMesh(
       this.wristRollPivot,
       centerPadGeo,
@@ -422,21 +424,21 @@ export class RoboticArm extends THREE.Group {
 
       const fingerOverlap = LAB_DIMENSIONS.JAW_FINGER_OVERLAP;
       const padT = this.jawPadThickness;
-      const fingerThicknessZ = 0.016;
+      const fingerThicknessZ = 0.015;
 
-      // Sliding carriage block riding on the chrome guide rails
-      const blockGeo = this.trackGeo(new THREE.BoxGeometry(0.038, 0.052, 0.026));
+      // Sliding carriage block riding on the chrome guide rails (height 44mm <= center slice)
+      const blockGeo = this.trackGeo(new THREE.BoxGeometry(0.036, 0.044, 0.024));
       this.addMesh(
         carriage,
         blockGeo,
         materials.brushedAluminum,
-        [railX, 0, zSign * (padT + fingerThicknessZ * 0.65)],
+        [railX, 0, zSign * (padT + fingerThicknessZ * 0.6)],
       );
 
-      // Machined gunmetal L-finger extending inward alongside the cube face
-      const fingerLenX = fingerOverlap + 0.024;
-      const fingerCenterX = s * (Lg + fingerOverlap * 0.5 - 0.012);
-      const fingerGeo = this.trackGeo(new THREE.BoxGeometry(fingerLenX, 0.044, fingerThicknessZ));
+      // Machined gunmetal L-finger extending inward alongside the cube's outer layer only
+      const fingerLenX = fingerOverlap + 0.022;
+      const fingerCenterX = s * (Lg + fingerOverlap * 0.5 - 0.011);
+      const fingerGeo = this.trackGeo(new THREE.BoxGeometry(fingerLenX, 0.038, fingerThicknessZ));
       this.addMesh(
         carriage,
         fingerGeo,
@@ -445,20 +447,20 @@ export class RoboticArm extends THREE.Group {
       );
 
       // Brushed aluminum outer reinforcing rib on jaw finger
-      const ribGeo = this.trackGeo(new THREE.BoxGeometry(fingerLenX * 0.8, 0.018, 0.005));
+      const ribGeo = this.trackGeo(new THREE.BoxGeometry(fingerLenX * 0.78, 0.016, 0.0045));
       this.addMesh(
         carriage,
         ribGeo,
         materials.brushedAluminum,
-        [fingerCenterX, 0, zSign * (padT + fingerThicknessZ + 0.0025)],
+        [fingerCenterX, 0, zSign * (padT + fingerThicknessZ + 0.0022)],
         undefined,
         false,
       );
 
       // Dark diamond-knurled rubberized grip pad!
       // Inner gripping surface sits at local z = 0 in the carriage frame so positioning
-      // carriage.position.z = zSign * (innerSeparation / 2) yields exact mathematical contact.
-      const padGeo = this.trackGeo(new THREE.BoxGeometry(fingerOverlap * 0.94, 0.052, padT));
+      // carriage.position.z = zSign * (innerSeparation / 2) yields exact mathematical flush contact.
+      const padGeo = this.trackGeo(new THREE.BoxGeometry(fingerOverlap * 0.92, 0.044, padT));
       this.addMesh(
         carriage,
         padGeo,
