@@ -5,7 +5,7 @@ import {getMoveSpec, type CubeMoveNotation} from './cubeMoves';
 import type {RoboticArm} from './RoboticArm';
 import type {RubiksCube} from './RubiksCube';
 import type {ServoAudio} from './ServoAudio';
-import type {MachineSnapshot, MachineState} from './types';
+import type {MachineSnapshot, MachineState, MotionSpeed} from './types';
 
 export interface AnimationControllerConfig {
   leftArm: RoboticArm;
@@ -18,7 +18,6 @@ export interface AnimationControllerConfig {
 /**
  * Coordinates the RoboticsChoreography state machine with the 3D RoboticArms,
  * RubiksCube face-turn pivot engine, dynamic tabletop contact shadow, and procedural servo audio.
- * Clean extension point for Part 2 (Scramble) & Part 3 (Auto-Solve) move queues.
  */
 export class AnimationController {
   public readonly choreography: RoboticsChoreography;
@@ -90,7 +89,29 @@ export class AnimationController {
     return this.choreography.triggerScramble(customSequence);
   }
 
-  /** Hook for future Part 3 (Auto-Solve) commands. */
+  /**
+   * Reads the accumulated moveHistory from RubiksCube, computes an optimized
+   * deterministic solution, and executes it (auto-lifting first if in STANDBY).
+   */
+  triggerAutoSolve(): boolean {
+    this.audio.unlock();
+    const history = this.rubiksCube.getMoveHistory();
+    return this.choreography.triggerAutoSolve(history);
+  }
+
+  /** Updates live playback speed multiplier (0.5x, 1x, 2x) even mid-sequence. */
+  setSpeedMultiplier(speed: MotionSpeed): void {
+    this.choreography.setSpeedMultiplier(speed);
+  }
+
+  getSpeedMultiplier(): MotionSpeed {
+    return this.choreography.getSpeedMultiplier();
+  }
+
+  isCubeSolved(): boolean {
+    return this.rubiksCube.isSolved();
+  }
+
   canRunCubeMoves(): boolean {
     return this.choreography.canPerformCubeMove();
   }
@@ -106,43 +127,54 @@ export class AnimationController {
     frame: ReturnType<RoboticsChoreography['evaluateFrame']>,
     dt: number,
   ): void {
+    const recordHistory = frame.committedMovesRecordHistory;
+
     // 1. Commit any face turns that finished during this frame step (zero skipped moves)
     for (const completedMove of frame.committedMoves) {
       if (this.activeTurnId === -1) {
         // Move started and finished inside a single large dt step
-        this.rubiksCube.applyMoveInstant(completedMove, true);
+        this.rubiksCube.applyMoveInstant(completedMove, recordHistory);
       } else {
-        this.rubiksCube.commitActiveMove(true);
+        this.rubiksCube.commitActiveMove(recordHistory);
         this.activeTurnId = -1;
       }
+      this.audio.playLayerLockClick();
     }
 
-    // 2. Drive live active face-turn pivot in exact lockstep with the twisting gripper wrist
+    // 2. Clear accumulated moveHistory once Auto-Solve completes & verify zero-drift solved state
+    if (frame.clearHistoryOnFinish) {
+      this.rubiksCube.clearMoveHistory();
+    }
+
+    // 3. Drive live active face-turn pivot in exact lockstep with the twisting gripper wrist
     if (frame.activeFaceTurn) {
       if (this.activeTurnId !== frame.activeFaceTurn.turnId) {
         this.activeTurnId = frame.activeFaceTurn.turnId;
         this.rubiksCube.beginMove(frame.activeFaceTurn.move);
-        this.audio.playFaceTwistCue(getMoveSpec(frame.activeFaceTurn.move).prime);
+        this.audio.playFaceTwistCue(
+          getMoveSpec(frame.activeFaceTurn.move).prime,
+          frame.snapshot.speedMultiplier,
+        );
       }
       this.rubiksCube.setActiveMoveProgress(frame.activeFaceTurn.easedProgress);
     }
 
-    // 3. Apply arm joint angles & LED visuals
+    // 4. Apply arm joint angles & LED visuals
     this.leftArm.applyJointAngles(frame.leftAngles);
     this.rightArm.applyJointAngles(frame.rightAngles);
 
     this.leftArm.updateVisuals(dt);
     this.rightArm.updateVisuals(dt);
 
-    // 4. Position & orient the Rubik's Cube rigidly at the gripper midpoint
+    // 5. Position & orient the Rubik's Cube rigidly at the gripper midpoint
     this.rubiksCube.position.set(
       frame.cubePosition.x,
       frame.cubePosition.y,
       frame.cubePosition.z,
     );
-    this.rubiksCube.rotation.set(0, frame.cubeYaw, 0);
+    this.rubiksCube.rotation.set(frame.cubePitch, frame.cubeYaw, 0);
 
-    // 5. Softly expand, translate, and soften the radial contact shadow on the pad
+    // 6. Softly expand, translate, and soften the radial contact shadow on the pad
     const liftNorm = Math.min(1, frame.cubeLiftHeight / 0.28);
     const shadowScale = 1 + liftNorm * 0.42;
     this.cubeShadowMesh.scale.setScalar(shadowScale);

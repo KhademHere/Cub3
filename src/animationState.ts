@@ -1,5 +1,6 @@
 import {
   ContinuousScrambleGenerator,
+  computeOptimizedSolution,
   getMoveSpec,
   type CubeMoveNotation,
   type CubeMoveSpec,
@@ -20,8 +21,10 @@ import {
   type ArmJointAngles,
   type MachineSnapshot,
   type MachineState,
+  type MotionSpeed,
   type ScrambleButtonMode,
   type ScrambleProgress,
+  type SolveProgress,
   type Vec3,
 } from './types';
 
@@ -29,6 +32,7 @@ export interface ChoreographyDurations {
   approach: number;
   grip: number;
   lift: number;
+  celebrate: number;
   lower: number;
   release: number;
   returnHome: number;
@@ -38,6 +42,7 @@ export const DEFAULT_DURATIONS: ChoreographyDurations = {
   approach: 1.35,
   grip: 0.65,
   lift: 1.25,
+  celebrate: 1.5,
   lower: 1.25,
   release: 0.6,
   returnHome: 1.3,
@@ -55,6 +60,8 @@ export interface ChoreographyFrame {
   leftAngles: ArmJointAngles;
   rightAngles: ArmJointAngles;
   cubePosition: Vec3;
+  /** Whole-cube pitch around world X during completion presentation flourish (0 otherwise). */
+  cubePitch: number;
   /** Whole-cube yaw around world Y during F/B overhead pass-off moves (0 at rest/hold). */
   cubeYaw: number;
   cubeAttached: boolean;
@@ -64,6 +71,10 @@ export interface ChoreographyFrame {
   activeFaceTurn: ActiveFaceTurnFrame | null;
   /** Moves whose twist phase finished during this step() call (ordered). */
   committedMoves: CubeMoveNotation[];
+  /** Whether committed moves in this frame should be appended to RubiksCube moveHistory. */
+  committedMovesRecordHistory: boolean;
+  /** True on the exact frame a solve completes so RubiksCube clears moveHistory. */
+  clearHistoryOnFinish: boolean;
   snapshot: MachineSnapshot;
 }
 
@@ -221,7 +232,7 @@ export class RoboticsChoreography {
   private readonly wp = makeWaypoints();
   private readonly listeners = new Set<(snapshot: MachineSnapshot) => void>();
 
-  // Indefinite Continuous Scramble + Custom Move Queue State (reusable for Part 3 Auto-Solve!)
+  // Indefinite Continuous Scramble + Deterministic Auto-Solve Queue State
   private readonly scrambleGenerator: ContinuousScrambleGenerator;
   private continuousScrambleActive = false;
   private pendingContinuousScramble = false;
@@ -229,6 +240,7 @@ export class RoboticsChoreography {
 
   private moveQueue: CubeMoveNotation[] = [];
   private pendingMoveQueue: CubeMoveNotation[] | null = null;
+  private pendingSolveQueue: CubeMoveNotation[] | null = null;
   private currentMoveIndex = 0;
   private currentMoveSpec: CubeMoveSpec | null = null;
   private currentSteps: MoveSubStep[] = [];
@@ -237,7 +249,11 @@ export class RoboticsChoreography {
   private turnIdCounter = 0;
   private currentTurnId = 0;
   private scrambledFlag = false;
+  private justSolvedFlag = false;
   private totalCommittedMoves = 0;
+  private solveTotalMoves = 0;
+  private speedMultiplier: MotionSpeed = 1;
+  private pendingClearHistory = false;
 
   // Scratch vectors to prevent GC allocations during 60fps evaluation
   private readonly _leftPos: Vec3 = {x: 0, y: 0, z: 0};
@@ -272,6 +288,20 @@ export class RoboticsChoreography {
     return this.scrambledFlag;
   }
 
+  getSpeedMultiplier(): MotionSpeed {
+    return this.speedMultiplier;
+  }
+
+  /**
+   * Adjusts choreography playback speed live (0.5x Precision, 1x Smooth, 2x Turbo)
+   * even mid-scramble or mid-solve without disrupting easing or zero-drift snapping.
+   */
+  setSpeedMultiplier(speed: MotionSpeed): void {
+    if (this.speedMultiplier === speed) return;
+    this.speedMultiplier = speed;
+    this.notify();
+  }
+
   /** Hook for Part 2 (Scramble) and Part 3 (Auto-Solve) to check if cube can be twisted. */
   canPerformCubeMove(): boolean {
     return this.state === 'HOLDING';
@@ -287,7 +317,12 @@ export class RoboticsChoreography {
       this.state === 'RETURNING';
 
     let primaryButtonLabel = 'Pick Up Cube';
-    if (this.state === 'HOLDING' || this.state === 'SCRAMBLING') {
+    if (
+      this.state === 'HOLDING' ||
+      this.state === 'SCRAMBLING' ||
+      this.state === 'SOLVING' ||
+      this.state === 'CELEBRATING'
+    ) {
       primaryButtonLabel = 'Put Down Cube';
     } else if (
       this.state === 'APPROACHING' ||
@@ -301,16 +336,28 @@ export class RoboticsChoreography {
 
     const isScrambling = this.state === 'SCRAMBLING';
     const isStoppingScramble = isScrambling && this.stopScrambleRequested;
+    const isSolving = this.state === 'SOLVING';
+    const isCelebrating = this.state === 'CELEBRATING';
     const isAutoLiftingToScramble =
       (this.pendingContinuousScramble || this.pendingMoveQueue !== null) &&
       this.isBusy() &&
       !isScrambling;
+    const isAutoLiftingToSolve =
+      this.pendingSolveQueue !== null && this.isBusy() && !isSolving;
 
     let scrambleProgress: ScrambleProgress | null = null;
+    let solveProgress: SolveProgress | null = null;
     let statusLabel = MACHINE_STATUS_LABELS[this.state];
     let scrambleButtonLabel = 'Scramble';
     let scrambleButtonMode: ScrambleButtonMode = 'start';
     let scrambleButtonDisabled = this.isBusy();
+
+    const isSolvedBadge =
+      isCelebrating || (this.justSolvedFlag && !this.scrambledFlag);
+
+    let solveButtonLabel = 'Auto-Solve';
+    let solveButtonDisabled =
+      this.isBusy() || !this.scrambledFlag || this.totalCommittedMoves === 0;
 
     if (isScrambling && this.currentMoveSpec) {
       // Open-ended 1-based live move number; increments cleanly as each turn completes
@@ -331,11 +378,39 @@ export class RoboticsChoreography {
         scrambleButtonMode = 'stop';
         scrambleButtonDisabled = false;
       }
+    } else if (isSolving && this.currentMoveSpec) {
+      const remainingMoves = Math.max(
+        1,
+        this.moveQueue.length - this.currentMoveIndex,
+      );
+      solveProgress = {
+        remainingMoves,
+        totalMoves: this.solveTotalMoves,
+        currentMove: this.currentMoveSpec.notation,
+      };
+      const unit = remainingMoves === 1 ? 'move' : 'moves';
+      statusLabel = `SOLVING • ${remainingMoves} ${unit} left (${this.currentMoveSpec.notation})`;
+      solveButtonLabel = 'Solving...';
+      solveButtonDisabled = true;
+    } else if (isCelebrating) {
+      statusLabel = 'SOLVED ✓';
+      solveButtonLabel = 'Solved';
+      solveButtonDisabled = true;
+    } else if (isAutoLiftingToSolve) {
+      solveButtonLabel = 'Lifting...';
+      solveButtonDisabled = true;
     } else if (this.state === 'HOLDING' && this.scrambledFlag) {
       statusLabel = 'HOLDING — SCRAMBLED';
       scrambleButtonLabel = 'Scramble';
       scrambleButtonMode = 'start';
       scrambleButtonDisabled = false;
+    } else if (this.state === 'HOLDING' && this.justSolvedFlag) {
+      statusLabel = 'HOLDING — SOLVED ✓';
+      solveButtonLabel = 'Solved';
+      solveButtonDisabled = true;
+    } else if (this.state === 'STANDBY' && this.justSolvedFlag && !this.scrambledFlag) {
+      solveButtonLabel = 'Solved';
+      solveButtonDisabled = true;
     } else if (isAutoLiftingToScramble) {
       scrambleButtonLabel = 'Lifting...';
       scrambleButtonMode = 'busy';
@@ -351,13 +426,19 @@ export class RoboticsChoreography {
       isScrambled: this.scrambledFlag,
       isScrambling,
       isStoppingScramble,
+      isSolving,
+      isSolvedBadge,
       primaryButtonLabel,
       primaryButtonDisabled: this.isBusy(),
       scrambleButtonLabel,
       scrambleButtonMode,
       scrambleButtonDisabled,
+      solveButtonLabel,
+      solveButtonDisabled,
+      speedMultiplier: this.speedMultiplier,
       phaseProgress,
       scrambleProgress,
+      solveProgress,
       moveHistoryCount: this.totalCommittedMoves,
     };
   }
@@ -372,18 +453,20 @@ export class RoboticsChoreography {
 
   /**
    * Triggers Pick Up when in STANDBY, or Put Down when in HOLDING.
-   * Cleanly ignored while any animation or scramble is mid-flight.
+   * Cleanly ignored while any animation, scramble, or solve is mid-flight.
    */
   triggerPrimaryAction(): boolean {
     if (this.state === 'STANDBY') {
       this.pendingMoveQueue = null;
       this.pendingContinuousScramble = false;
+      this.pendingSolveQueue = null;
       this.transitionTo('APPROACHING');
       return true;
     }
     if (this.state === 'HOLDING') {
       this.pendingMoveQueue = null;
       this.pendingContinuousScramble = false;
+      this.pendingSolveQueue = null;
       this.transitionTo('LOWERING');
       return true;
     }
@@ -404,7 +487,9 @@ export class RoboticsChoreography {
 
     if (this.state === 'STANDBY') {
       this.pendingMoveQueue = null;
+      this.pendingSolveQueue = null;
       this.pendingContinuousScramble = true;
+      this.justSolvedFlag = false;
       this.transitionTo('APPROACHING');
       return true;
     }
@@ -431,7 +516,7 @@ export class RoboticsChoreography {
 
   /**
    * Starts either indefinite continuous scrambling (when no customSequence is passed)
-   * or an explicit deterministic move queue (useful for Part 3 Auto-Solve & tests).
+   * or an explicit deterministic move queue.
    */
   triggerScramble(customSequence?: CubeMoveNotation[]): boolean {
     if (this.isBusy()) return false;
@@ -443,7 +528,9 @@ export class RoboticsChoreography {
     const sequence = [...customSequence];
     if (this.state === 'STANDBY') {
       this.pendingContinuousScramble = false;
+      this.pendingSolveQueue = null;
       this.pendingMoveQueue = sequence;
+      this.justSolvedFlag = false;
       this.transitionTo('APPROACHING');
       return true;
     }
@@ -454,25 +541,87 @@ export class RoboticsChoreography {
     return false;
   }
 
+  /**
+   * Computes a mathematically exact, optimized solution from accumulated `moveHistory`
+   * and executes it through the synchronized dual-arm manipulation engine.
+   * Automatically lifts the cube first if currently resting in STANDBY.
+   */
+  triggerAutoSolve(moveHistory: readonly CubeMoveNotation[]): boolean {
+    if (this.isBusy() || moveHistory.length === 0) {
+      return false;
+    }
+
+    const solution = computeOptimizedSolution(moveHistory);
+    if (solution.length === 0) {
+      // Moves cancelled out to identity — mark solved cleanly
+      this.scrambledFlag = false;
+      this.justSolvedFlag = true;
+      this.totalCommittedMoves = 0;
+      this.solveTotalMoves = 0;
+      this.pendingClearHistory = true;
+      if (this.state === 'HOLDING') {
+        this.transitionTo('CELEBRATING');
+      } else {
+        this.notify();
+      }
+      return true;
+    }
+
+    if (this.state === 'STANDBY') {
+      this.pendingContinuousScramble = false;
+      this.pendingMoveQueue = null;
+      this.pendingSolveQueue = solution;
+      this.transitionTo('APPROACHING');
+      return true;
+    }
+    if (this.state === 'HOLDING') {
+      this.startSolveSequence(solution);
+      return true;
+    }
+    return false;
+  }
+
   /** Advances choreography by `dt` seconds and returns the current pose frame. */
   step(dt: number): ChoreographyFrame {
     const safeDt = Math.max(0, Math.min(dt, 0.25));
     this.totalTime += safeDt;
 
+    const scaledDt = safeDt * this.speedMultiplier;
     const committedMoves: CubeMoveNotation[] = [];
+    let committedMovesRecordHistory = this.state !== 'SOLVING';
+    let clearHistoryOnFinish = this.pendingClearHistory;
+    this.pendingClearHistory = false;
 
-    if (this.state === 'SCRAMBLING') {
-      this.advanceScramble(safeDt, committedMoves);
+    if (this.state === 'SCRAMBLING' || this.state === 'SOLVING') {
+      committedMovesRecordHistory = this.state === 'SCRAMBLING';
+      const solvedNow = this.advanceActiveMove(scaledDt, committedMoves);
+      if (solvedNow) {
+        clearHistoryOnFinish = true;
+      }
     } else if (this.isBusy()) {
-      this.phaseElapsed += safeDt;
-      this.advancePhasesIfComplete(committedMoves);
+      this.phaseElapsed += scaledDt;
+      const result = this.advancePhasesIfComplete(committedMoves);
+      if (result.didSolveMove) {
+        committedMovesRecordHistory = false;
+      }
+      if (result.solvedNow) {
+        clearHistoryOnFinish = true;
+      }
     }
 
-    return this.evaluateFrame(committedMoves);
+    return this.evaluateFrame(
+      committedMoves,
+      committedMovesRecordHistory,
+      clearHistoryOnFinish,
+    );
   }
 
   /** Evaluates the exact kinematic pose for the current state without advancing time. */
-  evaluateFrame(committedMoves: CubeMoveNotation[] = []): ChoreographyFrame {
+  evaluateFrame(
+    committedMoves: CubeMoveNotation[] = [],
+    committedMovesRecordHistory = true,
+    clearHistoryOnFinish = false,
+  ): ChoreographyFrame {
     const wp = this.wp;
     let leftJawOpen = 1;
     let rightJawOpen = 1;
@@ -480,6 +629,7 @@ export class RoboticsChoreography {
     let rightPitch = 0;
     let leftRoll = 0;
     let rightRoll = 0;
+    let cubePitch = 0;
     let cubeYaw = 0;
     let cubeAttached = false;
     let activeFaceTurn: ActiveFaceTurnFrame | null = null;
@@ -591,8 +741,9 @@ export class RoboticsChoreography {
         break;
       }
 
-      case 'SCRAMBLING': {
-        const pose = this.evaluateScramblePose();
+      case 'SCRAMBLING':
+      case 'SOLVING': {
+        const pose = this.evaluateActiveMovePose();
         this._leftPos.x = pose.leftPos.x;
         this._leftPos.y = pose.leftPos.y;
         this._leftPos.z = pose.leftPos.z;
@@ -610,6 +761,42 @@ export class RoboticsChoreography {
         leftJawOpen = pose.leftJawOpen;
         rightJawOpen = pose.rightJawOpen;
         activeFaceTurn = pose.activeFaceTurn;
+        cubeAttached = true;
+        break;
+      }
+
+      case 'CELEBRATING': {
+        // Subtle, refined presentation tilt in mid-air while both clamps rotate
+        // in exact 1:1 lockstep on the left (-X) and right (+X) cube faces.
+        const rawT = clamp01(this.phaseElapsed / this.durations.celebrate);
+        const liftFlourish = Math.sin(rawT * Math.PI) * 0.026;
+        const y = LAB_DIMENSIONS.CUBE_HOLD_Y + liftFlourish;
+
+        // Smooth quintic presentation bow: 0 -> +0.44 rad -> -0.22 rad -> 0
+        let tilt = 0;
+        if (rawT < 0.36) {
+          tilt = lerp(0, 0.44, easeInOutQuint(rawT / 0.36));
+        } else if (rawT < 0.72) {
+          tilt = lerp(0.44, -0.22, easeInOutQuint((rawT - 0.36) / 0.36));
+        } else {
+          tilt = lerp(-0.22, 0, easeInOutQuint((rawT - 0.72) / 0.28));
+        }
+
+        this._leftPos.x = wp.leftClampHold.x;
+        this._leftPos.y = y;
+        this._leftPos.z = wp.leftClampHold.z;
+
+        this._rightPos.x = wp.rightClampHold.x;
+        this._rightPos.y = y;
+        this._rightPos.z = wp.rightClampHold.z;
+
+        this._cubePos.y = y;
+        cubePitch = tilt;
+        // Left wristRollPivot.rotation.x = +leftRoll; Right wristRollPivot.rotation.x = -rightRoll
+        leftRoll = tilt;
+        rightRoll = -tilt;
+        leftJawOpen = 0;
+        rightJawOpen = 0;
         cubeAttached = true;
         break;
       }
@@ -699,20 +886,23 @@ export class RoboticsChoreography {
         y: this._cubePos.y,
         z: this._cubePos.z,
       },
+      cubePitch,
       cubeYaw,
       cubeAttached,
       cubeLiftHeight: Math.max(0, this._cubePos.y - LAB_DIMENSIONS.CUBE_REST_Y),
       activeFaceTurn,
       committedMoves,
+      committedMovesRecordHistory,
+      clearHistoryOnFinish,
       snapshot: this.getSnapshot(),
     };
   }
 
   /**
    * Computes exact dual-arm positions, wrist pitches, wrist rolls, jaw openings,
-   * and synchronized face-turn progress for the active scramble micro-step.
+   * and synchronized face-turn progress for the active scramble or auto-solve micro-step.
    */
-  private evaluateScramblePose(): {
+  private evaluateActiveMovePose(): {
     leftPos: Vec3;
     rightPos: Vec3;
     cubePos: Vec3;
@@ -1204,10 +1394,13 @@ export class RoboticsChoreography {
   private startContinuousScramble(): void {
     this.continuousScrambleActive = true;
     this.pendingContinuousScramble = false;
+    this.pendingSolveQueue = null;
     this.stopScrambleRequested = false;
+    this.justSolvedFlag = false;
     this.moveQueue = [];
     this.pendingMoveQueue = null;
     this.currentMoveIndex = 0;
+    this.solveTotalMoves = 0;
     this.loadMoveNotation(this.scrambleGenerator.next());
     this.transitionTo('SCRAMBLING');
   }
@@ -1215,15 +1408,35 @@ export class RoboticsChoreography {
   private startMoveSequence(sequence: CubeMoveNotation[]): void {
     this.continuousScrambleActive = false;
     this.pendingContinuousScramble = false;
+    this.pendingSolveQueue = null;
     this.stopScrambleRequested = false;
+    this.justSolvedFlag = false;
     this.moveQueue = sequence;
     this.pendingMoveQueue = null;
     this.currentMoveIndex = 0;
+    this.solveTotalMoves = 0;
     const first = this.moveQueue[0];
     if (first) {
       this.scrambleGenerator.recordExternalFace(getMoveSpec(first).face);
       this.loadMoveNotation(first);
       this.transitionTo('SCRAMBLING');
+    }
+  }
+
+  private startSolveSequence(solution: CubeMoveNotation[]): void {
+    this.continuousScrambleActive = false;
+    this.pendingContinuousScramble = false;
+    this.pendingMoveQueue = null;
+    this.pendingSolveQueue = null;
+    this.stopScrambleRequested = false;
+    this.justSolvedFlag = false;
+    this.moveQueue = solution;
+    this.currentMoveIndex = 0;
+    this.solveTotalMoves = solution.length;
+    const first = this.moveQueue[0];
+    if (first) {
+      this.loadMoveNotation(first);
+      this.transitionTo('SOLVING');
     }
   }
 
@@ -1236,13 +1449,27 @@ export class RoboticsChoreography {
     this.currentTurnId = this.turnIdCounter;
   }
 
-  private advanceScramble(dt: number, committedMoves: CubeMoveNotation[]): void {
+  /**
+   * Advances active SCRAMBLING or SOLVING micro-steps.
+   * Returns `true` if a SOLVING sequence finished during this call.
+   */
+  private advanceActiveMove(
+    dt: number,
+    committedMoves: CubeMoveNotation[],
+  ): boolean {
     this.stepElapsed += dt;
+    let solvedNow = false;
 
-    while (this.state === 'SCRAMBLING') {
+    while (this.state === 'SCRAMBLING' || this.state === 'SOLVING') {
+      const isSolving = this.state === 'SOLVING';
       const step = this.currentSteps[this.currentStepIndex];
       if (!step) {
-        this.finishScramble();
+        if (isSolving) {
+          this.finishSolve();
+          solvedNow = true;
+        } else {
+          this.finishScramble();
+        }
         break;
       }
       if (this.stepElapsed < step.duration) {
@@ -1252,8 +1479,10 @@ export class RoboticsChoreography {
       const overflow = this.stepElapsed - step.duration;
       if (step.isTwist && this.currentMoveSpec) {
         committedMoves.push(this.currentMoveSpec.notation);
-        this.totalCommittedMoves += 1;
-        this.scrambledFlag = true;
+        if (!isSolving) {
+          this.totalCommittedMoves += 1;
+          this.scrambledFlag = true;
+        }
       }
 
       this.currentStepIndex += 1;
@@ -1261,26 +1490,32 @@ export class RoboticsChoreography {
         this.stepElapsed = overflow;
       } else {
         // Current move + neutral regrip finished cleanly!
-        if (this.stopScrambleRequested) {
+        if (!isSolving && this.stopScrambleRequested) {
           this.finishScramble();
           break;
         }
 
-        if (this.continuousScrambleActive) {
+        if (!isSolving && this.continuousScrambleActive) {
           // Generate the next non-redundant move on the fly indefinitely
           const nextMove = this.scrambleGenerator.next();
           this.loadMoveNotation(nextMove);
           this.stepElapsed = overflow;
           this.notify();
         } else {
-          // Finite scripted sequence (tests / Part 3 Auto-Solve)
+          // Finite move queue (deterministic scramble or Auto-Solve)
           this.currentMoveIndex += 1;
           if (this.currentMoveIndex < this.moveQueue.length) {
             const nextMove = this.moveQueue[this.currentMoveIndex];
-            this.scrambleGenerator.recordExternalFace(getMoveSpec(nextMove).face);
+            if (!isSolving) {
+              this.scrambleGenerator.recordExternalFace(getMoveSpec(nextMove).face);
+            }
             this.loadMoveNotation(nextMove);
             this.stepElapsed = overflow;
             this.notify();
+          } else if (isSolving) {
+            this.finishSolve(overflow);
+            solvedNow = true;
+            break;
           } else {
             this.finishScramble();
             break;
@@ -1288,6 +1523,8 @@ export class RoboticsChoreography {
         }
       }
     }
+
+    return solvedNow;
   }
 
   private finishScramble(): void {
@@ -1301,6 +1538,21 @@ export class RoboticsChoreography {
     this.transitionTo('HOLDING');
   }
 
+  private finishSolve(carryElapsed = 0): void {
+    this.continuousScrambleActive = false;
+    this.stopScrambleRequested = false;
+    this.moveQueue = [];
+    this.currentMoveSpec = null;
+    this.currentSteps = [];
+    this.currentStepIndex = 0;
+    this.stepElapsed = 0;
+    this.scrambledFlag = false;
+    this.justSolvedFlag = true;
+    this.totalCommittedMoves = 0;
+    this.solveTotalMoves = 0;
+    this.transitionTo('CELEBRATING', carryElapsed);
+  }
+
   private getPhaseDuration(state: MachineState): number {
     switch (state) {
       case 'APPROACHING':
@@ -1309,6 +1561,8 @@ export class RoboticsChoreography {
         return this.durations.grip;
       case 'LIFTING':
         return this.durations.lift;
+      case 'CELEBRATING':
+        return this.durations.celebrate;
       case 'LOWERING':
         return this.durations.lower;
       case 'RELEASING':
@@ -1328,6 +1582,8 @@ export class RoboticsChoreography {
         return 'LIFTING';
       case 'LIFTING':
         return 'HOLDING';
+      case 'CELEBRATING':
+        return 'HOLDING';
       case 'LOWERING':
         return 'RELEASING';
       case 'RELEASING':
@@ -1339,8 +1595,18 @@ export class RoboticsChoreography {
     }
   }
 
-  private advancePhasesIfComplete(committedMoves: CubeMoveNotation[]): void {
-    while (this.isBusy() && this.state !== 'SCRAMBLING') {
+  private advancePhasesIfComplete(committedMoves: CubeMoveNotation[]): {
+    didSolveMove: boolean;
+    solvedNow: boolean;
+  } {
+    let didSolveMove = false;
+    let solvedNow = false;
+
+    while (
+      this.isBusy() &&
+      this.state !== 'SCRAMBLING' &&
+      this.state !== 'SOLVING'
+    ) {
       const duration = this.getPhaseDuration(this.state);
       if (duration <= 0 || this.phaseElapsed < duration) {
         break;
@@ -1352,11 +1618,11 @@ export class RoboticsChoreography {
         break;
       }
 
-      // Seamless Auto-Lift Integration: once LIFTING reaches HOLDING, immediately start scrambling!
+      // Seamless Auto-Lift Integration: once LIFTING reaches HOLDING, immediately start scrambling or solving!
       if (next === 'HOLDING' && this.pendingContinuousScramble) {
         this.startContinuousScramble();
         if (overflow > 0) {
-          this.advanceScramble(overflow, committedMoves);
+          this.advanceActiveMove(overflow, committedMoves);
         }
         break;
       }
@@ -1364,13 +1630,24 @@ export class RoboticsChoreography {
         const queued = this.pendingMoveQueue;
         this.startMoveSequence(queued);
         if (overflow > 0) {
-          this.advanceScramble(overflow, committedMoves);
+          this.advanceActiveMove(overflow, committedMoves);
+        }
+        break;
+      }
+      if (next === 'HOLDING' && this.pendingSolveQueue && this.pendingSolveQueue.length > 0) {
+        const solution = this.pendingSolveQueue;
+        this.startSolveSequence(solution);
+        didSolveMove = true;
+        if (overflow > 0) {
+          solvedNow = this.advanceActiveMove(overflow, committedMoves);
         }
         break;
       }
 
       this.transitionTo(next, overflow);
     }
+
+    return {didSolveMove, solvedNow};
   }
 
   private transitionTo(next: MachineState, carryElapsed = 0): void {

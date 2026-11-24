@@ -10,7 +10,7 @@ import {createLabMaterials, type LabMaterialLibrary} from './materials';
 import {RoboticArm} from './RoboticArm';
 import {RubiksCube} from './RubiksCube';
 import {ServoAudio} from './ServoAudio';
-import type {MachineSnapshot} from './types';
+import type {MachineSnapshot, MotionSpeed} from './types';
 
 const DEFAULT_CAMERA_POS = new THREE.Vector3(0, 1.66, 0.38);
 const DEFAULT_CAMERA_TARGET = new THREE.Vector3(
@@ -51,6 +51,7 @@ export class WorkbenchScene extends xb.Script {
   private xrStatusText: xb.UIText | null = null;
   private xrActionButton: xb.UIButton | null = null;
   private xrScrambleButton: xb.UIButton | null = null;
+  private xrSolveButton: xb.UIButton | null = null;
   private unsubscribeController: (() => void) | null = null;
   private onXrVisibilityChange?: (inXr: boolean) => void;
 
@@ -128,7 +129,8 @@ export class WorkbenchScene extends xb.Script {
         // Keep spatial MSDF text ASCII-safe to prevent missing-glyph warnings
         this.xrStatusText.text = snapshot.statusLabel
           .replace(/•/g, '-')
-          .replace(/—/g, '-');
+          .replace(/—/g, '-')
+          .replace(/✓/g, 'OK');
       }
       if (this.xrActionButton) {
         this.xrActionButton.label = snapshot.primaryButtonLabel;
@@ -137,6 +139,10 @@ export class WorkbenchScene extends xb.Script {
       if (this.xrScrambleButton) {
         this.xrScrambleButton.label = snapshot.scrambleButtonLabel;
         this.xrScrambleButton.disabled = snapshot.scrambleButtonDisabled;
+      }
+      if (this.xrSolveButton) {
+        this.xrSolveButton.label = snapshot.solveButtonLabel.replace(/✓/g, 'OK');
+        this.xrSolveButton.disabled = snapshot.solveButtonDisabled;
       }
     });
 
@@ -425,8 +431,15 @@ export class WorkbenchScene extends xb.Script {
         this.toggleScramble();
       },
     });
+    this.xrSolveButton = new xb.UIButton({
+      label: 'Auto-Solve',
+      style: {flexGrow: 1},
+      onClick: () => {
+        this.triggerAutoSolve();
+      },
+    });
     this.xrCard = new xb.UICard({
-      size: {width: 0.52, height: 'auto'},
+      size: {width: 0.64, height: 'auto'},
       manipulation: true,
       edge: true,
       style: {
@@ -442,7 +455,11 @@ export class WorkbenchScene extends xb.Script {
         this.xrStatusText,
         new xb.UIPanel({
           style: {width: '100%', flexDirection: 'row', gap: 10},
-          children: [this.xrActionButton, this.xrScrambleButton],
+          children: [
+            this.xrActionButton,
+            this.xrScrambleButton,
+            this.xrSolveButton,
+          ],
         }),
       ],
     });
@@ -505,6 +522,18 @@ export class WorkbenchScene extends xb.Script {
     return this.controller?.triggerScramble(customSequence) ?? false;
   }
 
+  triggerAutoSolve(): boolean {
+    return this.controller?.triggerAutoSolve() ?? false;
+  }
+
+  setSpeedMultiplier(speed: MotionSpeed): void {
+    this.controller?.setSpeedMultiplier(speed);
+  }
+
+  isCubeSolved(): boolean {
+    return this.rubiksCube?.isSolved() ?? true;
+  }
+
   resetCameraView(): void {
     if (!this.controls) return;
     if (this.isSoftwareGl) {
@@ -531,9 +560,10 @@ export class WorkbenchScene extends xb.Script {
   update(): void {
     const maxFrameDt = this.isSoftwareGl ? 1.0 : 0.1;
     const dt = Math.min(xb.getDeltaTime(), maxFrameDt);
+    const maxSlice = this.isSoftwareGl ? 0.06 : 0.1;
     let remaining = dt;
     while (remaining > 1e-6) {
-      const slice = Math.min(remaining, 0.1);
+      const slice = Math.min(remaining, maxSlice);
       this.controller.update(slice);
       remaining -= slice;
     }

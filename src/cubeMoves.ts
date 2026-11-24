@@ -169,6 +169,95 @@ export function generateScrambleSequence(
   return sequence;
 }
 
+/**
+ * Optimizes a cube move sequence to eliminate all redundant turns:
+ * - Cancels adjacent inverse pairs (e.g., `L L'` -> removed, `R L R'` -> `L`)
+ * - Collapses triple identical turns into a single inverse (`U U U` -> `U'`)
+ * - Cancels 4 identical turns (`F F F F` -> removed)
+ * - Repeats passes until full fixed-point convergence so cascading cancellations
+ *   (e.g., `R U U' R'`) also reduce cleanly to empty.
+ *
+ * Uses exact group theory on disjoint opposite-face pairs (`{U,D}`, `{L,R}`, `{F,B}`),
+ * which commute because they act on non-overlapping layers along the same axis.
+ */
+export function optimizeMoveSequence(
+  moves: readonly CubeMoveNotation[],
+): CubeMoveNotation[] {
+  let current: CubeMoveNotation[] = [...moves];
+
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const next: CubeMoveNotation[] = [];
+    let i = 0;
+
+    while (i < current.length) {
+      const startSpec = getMoveSpec(current[i]);
+      const axis = startSpec.axis;
+      // Collect maximal contiguous run of moves sharing the same rotation axis
+      let j = i;
+      const runFaces = new Map<CubeFace, number>();
+      const faceOrder: CubeFace[] = [];
+
+      while (j < current.length && getMoveSpec(current[j]).axis === axis) {
+        const spec = getMoveSpec(current[j]);
+        if (!runFaces.has(spec.face)) {
+          faceOrder.push(spec.face);
+          runFaces.set(spec.face, 0);
+        }
+        // Track clockwise quarter-turns (+1 for CW face move, -1 for prime)
+        const delta = spec.prime ? -1 : 1;
+        runFaces.set(spec.face, (runFaces.get(spec.face) ?? 0) + delta);
+        j += 1;
+      }
+
+      const reduced: CubeMoveNotation[] = [];
+      for (const face of faceOrder) {
+        const raw = runFaces.get(face) ?? 0;
+        const mod = ((raw % 4) + 4) % 4;
+        if (mod === 1) {
+          reduced.push(face as CubeMoveNotation);
+        } else if (mod === 2) {
+          reduced.push(face as CubeMoveNotation, face as CubeMoveNotation);
+        } else if (mod === 3) {
+          reduced.push(`${face}'` as CubeMoveNotation);
+        }
+      }
+
+      const runLen = j - i;
+      if (
+        reduced.length !== runLen ||
+        reduced.some((m, idx) => m !== current[i + idx])
+      ) {
+        changed = true;
+      }
+
+      next.push(...reduced);
+      i = j;
+    }
+
+    current = next;
+  }
+
+  return current;
+}
+
+/**
+ * Generates an exact, optimized Part 3 Auto-Solve queue from accumulated `moveHistory`:
+ * 1. Reverses the recorded history and inverts every move (`R` <-> `R'`).
+ * 2. Runs the fixed-point Move Optimization Pass for an intelligent, minimal solve.
+ */
+export function computeOptimizedSolution(
+  moveHistory: readonly CubeMoveNotation[],
+): CubeMoveNotation[] {
+  if (moveHistory.length === 0) return [];
+  const reversedInverses: CubeMoveNotation[] = [];
+  for (let i = moveHistory.length - 1; i >= 0; i--) {
+    reversedInverses.push(getInverseMove(moveHistory[i]));
+  }
+  return optimizeMoveSequence(reversedInverses);
+}
+
 const _rotMat = new THREE.Matrix4();
 const _snappedMat = new THREE.Matrix4();
 const _colX = new THREE.Vector3();

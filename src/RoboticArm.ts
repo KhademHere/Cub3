@@ -14,6 +14,8 @@ const LED_PALETTE: Record<ArmLedMode, {color: number; emissive: number; intensit
   moving: {color: 0xfbbf24, emissive: 0xf59e0b, intensity: 2.1},
   gripping: {color: 0x34d399, emissive: 0x10b981, intensity: 2.25},
   scrambling: {color: 0xfbbf24, emissive: 0xf59e0b, intensity: 2.35},
+  solving: {color: 0x22d3ee, emissive: 0x06b6d4, intensity: 2.35},
+  celebrating: {color: 0x2dd4bf, emissive: 0x10b981, intensity: 2.75},
 };
 
 /**
@@ -505,21 +507,34 @@ export class RoboticArm extends THREE.Group {
     this.setJawOpen(angles.jawOpen);
   }
 
-  /** Updates the target LED color state (idle cyan / moving amber / gripping emerald). */
+  /** Updates the target LED color state (idle cyan / moving amber / gripping emerald / solving / celebrating). */
   setLedMode(mode: ArmLedMode): void {
+    this.ledMode = mode;
     const preset = LED_PALETTE[mode];
     this.targetLedColor.setHex(preset.color);
     this.targetLedEmissive.setHex(preset.emissive);
     this.targetLedIntensity = preset.intensity;
   }
 
-  /** Smoothly interpolates joint LED colors each frame. */
+  /** Smoothly interpolates joint LED colors and drives state-specific rhythmic pulses. */
   updateVisuals(dt: number): void {
-    const alpha = 1 - Math.exp(-8 * Math.min(dt, 0.05));
+    const safeDt = Math.min(dt, 0.05);
+    this.ledPulseTime += safeDt;
+    const alpha = 1 - Math.exp(-8 * safeDt);
     this.ledMaterial.color.lerp(this.targetLedColor, alpha);
     this.ledMaterial.emissive.lerp(this.targetLedEmissive, alpha);
+
+    let desiredIntensity = this.targetLedIntensity;
+    if (this.ledMode === 'scrambling') {
+      desiredIntensity = this.targetLedIntensity + Math.sin(this.ledPulseTime * 7.5) * 0.65;
+    } else if (this.ledMode === 'solving') {
+      desiredIntensity = this.targetLedIntensity + Math.sin(this.ledPulseTime * 5.2) * 0.5;
+    } else if (this.ledMode === 'celebrating') {
+      desiredIntensity = this.targetLedIntensity + Math.sin(this.ledPulseTime * 6.0) * 0.85;
+    }
+
     this.ledMaterial.emissiveIntensity +=
-      (this.targetLedIntensity - this.ledMaterial.emissiveIntensity) * alpha;
+      (desiredIntensity - this.ledMaterial.emissiveIntensity) * alpha;
   }
 
   /** Returns the world position of the gripper's center contact plane. */

@@ -66,16 +66,50 @@ export class ServoAudio {
       case 'SCRAMBLING':
         this.playServoSweep(290, 440, 0.3, 0.03);
         break;
+      case 'SOLVING':
+        this.playServoSweep(310, 490, 0.34, 0.032);
+        break;
+      case 'CELEBRATING':
+        this.playSolvedChime();
+        break;
       case 'STANDBY':
         break;
     }
   }
 
-  /** Plays a crisp, weighted wrist-actuator twist cue for each 90-degree face turn. */
-  playFaceTwistCue(prime: boolean): void {
+  /** Plays a crisp, weighted wrist-actuator servo whirr for each 90-degree face turn. */
+  playFaceTwistCue(prime: boolean, speedMultiplier = 1): void {
     if (this.muted || !this.ctx || this.ctx.state !== 'running') return;
-    this.playServoSweep(prime ? 350 : 280, prime ? 250 : 410, 0.24, 0.026);
-    this.playClampClick(prime ? 580 : 660, 0.022);
+    const dur = Math.max(0.11, 0.24 / Math.max(0.5, speedMultiplier));
+    this.playServoSweep(prime ? 350 : 280, prime ? 250 : 410, dur, 0.024);
+  }
+
+  /** Plays a crisp, tactile magnetic detent click the instant a 90-degree layer locks into place. */
+  playLayerLockClick(): void {
+    if (this.muted || !this.ctx || this.ctx.state !== 'running') return;
+    this.playClampClick(920, 0.038);
+  }
+
+  /** Plays a subtle, calm dual-harmonic completion chime when the cube finishes solving. */
+  private playSolvedChime(): void {
+    if (!this.ctx) return;
+    const now = this.ctx.currentTime;
+    const notes = [523.25, 659.25, 783.99]; // C5 - E5 - G5 clean triad
+    notes.forEach((freq, idx) => {
+      if (!this.ctx) return;
+      const start = now + idx * 0.095;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, start);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.linearRampToValueAtTime(0.034, start + 0.025);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.42);
+      osc.connect(gain);
+      gain.connect(this.ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.45);
+    });
   }
 
   private playServoSweep(

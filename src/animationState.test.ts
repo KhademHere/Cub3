@@ -381,4 +381,194 @@ test('indefinite continuous scramble runs past 26+ moves, stops gracefully mid-t
   assert.ok(Math.abs(restFrame.cubePosition.y - LAB_DIMENSIONS.CUBE_REST_Y) < 1e-4);
 });
 
+test('Auto-Solve from STANDBY auto-lifts, executes optimized solution, celebrates with lockstep pitch, and settles in HOLDING — SOLVED', () => {
+  const choreo = new RoboticsChoreography();
+  const seenStates: MachineState[] = [];
+  choreo.subscribe((snap) => {
+    if (seenStates[seenStates.length - 1] !== snap.state) {
+      seenStates.push(snap.state);
+    }
+  });
+
+  // Initially solved -> Auto-Solve button must be disabled
+  assert.equal(choreo.getSnapshot().solveButtonDisabled, true);
+
+  // 1. Back-to-back scrambles with redundant junction moves (R U' U U' -> R U')
+  const scramble1: CubeMoveNotation[] = ['R', 'U', 'F'];
+  const scramble2: CubeMoveNotation[] = ["F'", 'L', 'L', 'L', "D'"];
+  const recordedHistory: CubeMoveNotation[] = [];
+
+  assert.equal(choreo.triggerScramble(scramble1), true);
+  while (choreo.getState() !== 'HOLDING') {
+    const f = choreo.step(0.02);
+    if (f.committedMovesRecordHistory) recordedHistory.push(...f.committedMoves);
+  }
+  assert.equal(choreo.triggerScramble(scramble2), true);
+  while (choreo.getState() !== 'HOLDING') {
+    const f = choreo.step(0.02);
+    if (f.committedMovesRecordHistory) recordedHistory.push(...f.committedMoves);
+  }
+  assert.deepEqual(recordedHistory, [...scramble1, ...scramble2]);
+  assert.equal(choreo.getSnapshot().solveButtonDisabled, false);
+
+  // 2. Put Down scrambled cube onto the workbench table
+  assert.equal(choreo.triggerPrimaryAction(), true);
+  advanceBy(
+    choreo,
+    DEFAULT_DURATIONS.lower +
+      DEFAULT_DURATIONS.release +
+      DEFAULT_DURATIONS.returnHome +
+      0.05,
+  );
+  assert.equal(choreo.getState(), 'STANDBY');
+  assert.equal(choreo.getSnapshot().solveButtonDisabled, false);
+
+  // 3. Trigger Auto-Solve directly from STANDBY -> must auto-lift first!
+  assert.equal(choreo.triggerAutoSolve(recordedHistory), true);
+  assert.equal(choreo.getState(), 'APPROACHING');
+  assert.equal(choreo.getSnapshot().solveButtonLabel, 'Lifting...');
+  assert.equal(choreo.getSnapshot().solveButtonDisabled, true);
+  assert.equal(choreo.getSnapshot().primaryButtonDisabled, true);
+  assert.equal(choreo.getSnapshot().scrambleButtonDisabled, true);
+
+  // 4. Step through Auto-Lift -> SOLVING -> CELEBRATING -> HOLDING
+  const solveMovesExecuted: CubeMoveNotation[] = [];
+  let sawSolvingTelemetry = false;
+  let sawSolvingLed = false;
+  let sawCelebratingTilt = false;
+  let sawClearHistoryFlag = false;
+  let steps = 0;
+
+  while (steps < 4000) {
+    const frame = choreo.step(0.02);
+    steps += 1;
+
+    if (frame.committedMoves.length > 0) {
+      assert.equal(
+        frame.committedMovesRecordHistory,
+        false,
+        'Solve moves must never be appended to scramble moveHistory',
+      );
+      solveMovesExecuted.push(...frame.committedMoves);
+    }
+    if (frame.clearHistoryOnFinish) {
+      sawClearHistoryFlag = true;
+    }
+
+    if (frame.snapshot.state === 'SOLVING') {
+      assert.equal(choreo.triggerPrimaryAction(), false);
+      assert.equal(choreo.toggleScramble(), false);
+      assert.equal(choreo.triggerAutoSolve(recordedHistory), false);
+      if (/^SOLVING • \d+ moves? left \([UDLRFB]'?\)$/.test(frame.snapshot.statusLabel)) {
+        sawSolvingTelemetry = true;
+      }
+      if (frame.snapshot.ledMode === 'solving') {
+        sawSolvingLed = true;
+      }
+    }
+
+    if (frame.snapshot.state === 'CELEBRATING') {
+      assert.equal(frame.snapshot.statusLabel, 'SOLVED ✓');
+      assert.equal(frame.snapshot.ledMode, 'celebrating');
+      // Both clamped grippers must stay in exact 1:1 lockstep with cubePitch
+      assert.equal(frame.leftAngles.jawOpen, 0);
+      assert.equal(frame.rightAngles.jawOpen, 0);
+      assert.ok(Math.abs(frame.leftAngles.wristRoll - frame.cubePitch) < 1e-6);
+      assert.ok(Math.abs(frame.rightAngles.wristRoll + frame.cubePitch) < 1e-6);
+      if (Math.abs(frame.cubePitch) > 0.25) {
+        sawCelebratingTilt = true;
+      }
+    }
+
+    if (frame.snapshot.state === 'HOLDING' && sawClearHistoryFlag) {
+      break;
+    }
+  }
+
+  // Raw history had 8 moves (R U F F' L L L D'); optimized solution collapses F F' and L L L -> D L U' R' (4 moves!)
+  assert.deepEqual(solveMovesExecuted, ['D', 'L', "U'", "R'"]);
+  assert.equal(sawSolvingTelemetry, true);
+  assert.equal(sawSolvingLed, true);
+  assert.equal(sawCelebratingTilt, true);
+  assert.equal(sawClearHistoryFlag, true);
+
+  const finalSnap = choreo.getSnapshot();
+  assert.equal(finalSnap.state, 'HOLDING');
+  assert.equal(finalSnap.statusLabel, 'HOLDING — SOLVED ✓');
+  assert.equal(finalSnap.isScrambled, false);
+  assert.equal(finalSnap.isSolvedBadge, true);
+  assert.equal(finalSnap.solveButtonDisabled, true);
+  assert.equal(finalSnap.solveButtonLabel, 'Solved');
+  assert.equal(finalSnap.primaryButtonDisabled, false);
+  assert.equal(finalSnap.scrambleButtonDisabled, false);
+  assert.equal(finalSnap.moveHistoryCount, 0);
+
+  assert.deepEqual(seenStates, [
+    'STANDBY',
+    'APPROACHING',
+    'GRIPPING',
+    'LIFTING',
+    'SCRAMBLING',
+    'HOLDING',
+    'SCRAMBLING',
+    'HOLDING',
+    'LOWERING',
+    'RELEASING',
+    'RETURNING',
+    'STANDBY',
+    'APPROACHING',
+    'GRIPPING',
+    'LIFTING',
+    'SOLVING',
+    'CELEBRATING',
+    'HOLDING',
+  ]);
+});
+
+test('Motion speed multiplier (0.5x, 1x, 2x) scales choreography timing accurately even mid-sequence', () => {
+  const measureLiftTime = (speed: 0.5 | 1 | 2): number => {
+    const c = new RoboticsChoreography();
+    c.setSpeedMultiplier(speed);
+    assert.equal(c.getSpeedMultiplier(), speed);
+    c.triggerPrimaryAction();
+    let elapsed = 0;
+    while (c.getState() !== 'HOLDING' && elapsed < 30) {
+      c.step(0.01);
+      elapsed += 0.01;
+    }
+    return elapsed;
+  };
+
+  const tHalf = measureLiftTime(0.5);
+  const tOne = measureLiftTime(1);
+  const tDouble = measureLiftTime(2);
+
+  assert.ok(
+    Math.abs(tHalf / tOne - 2) < 0.05,
+    `Expected 0.5x (${tHalf.toFixed(2)}s) to be ~2x slower than 1x (${tOne.toFixed(2)}s)`,
+  );
+  assert.ok(
+    Math.abs(tOne / tDouble - 2) < 0.05,
+    `Expected 2x (${tDouble.toFixed(2)}s) to be ~2x faster than 1x (${tOne.toFixed(2)}s)`,
+  );
+
+  // Verify live mid-solve speed switching works without errors or stuck state
+  const liveChoreo = new RoboticsChoreography();
+  liveChoreo.triggerScramble(['R', 'U', 'F']);
+  while (liveChoreo.getState() !== 'HOLDING') {
+    liveChoreo.step(0.02);
+  }
+  assert.equal(liveChoreo.triggerAutoSolve(['R', 'U', 'F']), true);
+  liveChoreo.setSpeedMultiplier(0.5);
+  liveChoreo.step(0.05);
+  assert.equal(liveChoreo.getSnapshot().speedMultiplier, 0.5);
+  liveChoreo.setSpeedMultiplier(2);
+  assert.equal(liveChoreo.getSnapshot().speedMultiplier, 2);
+  while (liveChoreo.getState() !== 'HOLDING') {
+    liveChoreo.step(0.02);
+  }
+  assert.equal(liveChoreo.getSnapshot().statusLabel, 'HOLDING — SOLVED ✓');
+});
+
+
 

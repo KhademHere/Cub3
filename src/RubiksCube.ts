@@ -14,6 +14,7 @@ import type {CubieCoord, FaceAxis, FaceLayer} from './types';
 export interface CubieUnit {
   group: THREE.Group;
   coord: CubieCoord;
+  readonly solvedCoord: Readonly<CubieCoord>;
 }
 
 /**
@@ -173,6 +174,7 @@ export class RubiksCube extends THREE.Group {
           this.cubies.push({
             group: cubieGroup,
             coord: {x, y, z},
+            solvedCoord: {x, y, z},
           });
         }
       }
@@ -252,6 +254,52 @@ export class RubiksCube extends THREE.Group {
 
   getMoveHistory(): readonly CubeMoveNotation[] {
     return this.moveHistory;
+  }
+
+  /** Clears the recorded move history once an Auto-Solve completes cleanly. */
+  clearMoveHistory(): void {
+    this.moveHistory.length = 0;
+  }
+
+  /**
+   * Mathematically verifies that all 27 cubies sit at their exact solved integer grid
+   * coordinates and every outward-facing colored sticker matches the solved cube orientation.
+   */
+  isSolved(): boolean {
+    const identity = new THREE.Quaternion();
+    const normal = new THREE.Vector3();
+    const expected = new THREE.Vector3();
+
+    for (const unit of this.cubies) {
+      const {x, y, z} = unit.solvedCoord;
+      // 1. Exact integer grid slot & local position
+      if (unit.coord.x !== x || unit.coord.y !== y || unit.coord.z !== z) {
+        return false;
+      }
+      if (
+        Math.abs(unit.group.position.x - x * this.cubieSpacing) > 1e-6 ||
+        Math.abs(unit.group.position.y - y * this.cubieSpacing) > 1e-6 ||
+        Math.abs(unit.group.position.z - z * this.cubieSpacing) > 1e-6
+      ) {
+        return false;
+      }
+
+      // 2. Orientation check: corners & edges must match exact identity;
+      //    face centers (|x|+|y|+|z| === 1) must preserve their outward face normal.
+      const nonZeroAxes = Math.abs(x) + Math.abs(y) + Math.abs(z);
+      if (nonZeroAxes >= 2) {
+        if (unit.group.quaternion.angleTo(identity) > 1e-4) {
+          return false;
+        }
+      } else if (nonZeroAxes === 1) {
+        expected.set(x, y, z);
+        normal.copy(expected).applyQuaternion(unit.group.quaternion);
+        if (normal.dot(expected) < 0.9999) {
+          return false;
+        }
+      }
+    }
+    return true;
   }
 
   /**

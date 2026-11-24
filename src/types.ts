@@ -7,13 +7,23 @@ export type MachineState =
   | 'LIFTING'
   | 'HOLDING'
   | 'SCRAMBLING'
+  | 'SOLVING'
+  | 'CELEBRATING'
   | 'LOWERING'
   | 'RELEASING'
   | 'RETURNING';
 
-export type ArmLedMode = 'idle' | 'moving' | 'gripping' | 'scrambling';
+export type ArmLedMode =
+  | 'idle'
+  | 'moving'
+  | 'gripping'
+  | 'scrambling'
+  | 'solving'
+  | 'celebrating';
 
 export type ArmSide = 'left' | 'right';
+
+export type MotionSpeed = 0.5 | 1 | 2;
 
 export type FaceAxis = 'x' | 'y' | 'z';
 export type FaceLayer = -1 | 0 | 1;
@@ -54,6 +64,13 @@ export interface ScrambleProgress {
   isStopping: boolean;
 }
 
+export interface SolveProgress {
+  /** Moves remaining including the currently executing move. */
+  remainingMoves: number;
+  totalMoves: number;
+  currentMove: CubeMoveNotation;
+}
+
 export interface MachineSnapshot {
   state: MachineState;
   statusLabel: string;
@@ -63,13 +80,19 @@ export interface MachineSnapshot {
   isScrambled: boolean;
   isScrambling: boolean;
   isStoppingScramble: boolean;
+  isSolving: boolean;
+  isSolvedBadge: boolean;
   primaryButtonLabel: string;
   primaryButtonDisabled: boolean;
   scrambleButtonLabel: string;
   scrambleButtonMode: ScrambleButtonMode;
   scrambleButtonDisabled: boolean;
+  solveButtonLabel: string;
+  solveButtonDisabled: boolean;
+  speedMultiplier: MotionSpeed;
   phaseProgress: number;
   scrambleProgress: ScrambleProgress | null;
+  solveProgress: SolveProgress | null;
   moveHistoryCount: number;
 }
 
@@ -80,6 +103,8 @@ export const MACHINE_STATUS_LABELS: Record<MachineState, string> = {
   LIFTING: 'GRIPPING — LIFTING',
   HOLDING: 'HOLDING — READY',
   SCRAMBLING: 'SCRAMBLING',
+  SOLVING: 'SOLVING',
+  CELEBRATING: 'SOLVED ✓',
   LOWERING: 'GRIPPING — LOWERING',
   RELEASING: 'RELEASING',
   RETURNING: 'RETURNING',
@@ -95,6 +120,10 @@ export function getArmLedMode(state: MachineState): ArmLedMode {
       return 'moving';
     case 'SCRAMBLING':
       return 'scrambling';
+    case 'SOLVING':
+      return 'solving';
+    case 'CELEBRATING':
+      return 'celebrating';
     case 'GRIPPING':
     case 'LIFTING':
     case 'HOLDING':

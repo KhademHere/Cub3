@@ -1,28 +1,42 @@
-import type {MachineSnapshot} from './types';
+import type {MachineSnapshot, MotionSpeed} from './types';
 
 export interface ControlHUDCallbacks {
   onPrimaryAction: () => void;
   onScramble: () => void;
+  onAutoSolve: () => void;
+  onSetSpeed: (speed: MotionSpeed) => void;
   onResetCamera: () => void;
   onToggleMute: () => boolean;
+  isCubeSolved: () => boolean;
 }
+
+const SPEED_OPTIONS: Array<{value: MotionSpeed; label: string; title: string}> = [
+  {value: 0.5, label: '0.5x', title: 'Precision Slow-Motion (0.5x)'},
+  {value: 1, label: '1x', title: 'Default Smooth (1x)'},
+  {value: 2, label: '2x', title: 'Turbo Speed (2x)'},
+];
 
 const ICON_PICKUP = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>`;
 const ICON_PUTDOWN = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>`;
 const ICON_SCRAMBLE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`;
 const ICON_STOP = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>`;
+const ICON_SOLVE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3z"/><path d="M19 3v4"/><path d="M21 5h-4"/></svg>`;
+const ICON_CHECK = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="20 6 9 17 4 12"/></svg>`;
 const ICON_RESET_CAM = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`;
 const ICON_SOUND_ON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
 const ICON_SOUND_OFF = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`;
 
 /**
  * Minimal, accessible 2D DOM HUD overlay:
- * - Top-left compact machine status pill (STANDBY, APPROACHING, GRIPPING, HOLDING — READY)
- * - Sleek collapsible floating bottom control bar with Pick Up / Put Down button,
- *   camera reset, and audio mute toggle (clean slot ready for Scramble & Auto-Solve in Parts 2 & 3).
+ * - Top-left compact machine status pill with live scramble/solve telemetry
+ * - Top-right audio mute/unmute toggle pill
+ * - Sleek collapsible floating bottom control bar with Pick Up / Put Down,
+ *   Scramble ↔ Stop Scramble, Auto-Solve, live Speed selector (0.5x / 1x / 2x),
+ *   and camera reset.
  */
 export class ControlHUD {
   private readonly root: HTMLElement;
+  private readonly callbacks: ControlHUDCallbacks;
   private readonly statusSwatch: HTMLSpanElement;
   private readonly statusValue: HTMLSpanElement;
   private readonly primaryBtn: HTMLButtonElement;
@@ -31,6 +45,10 @@ export class ControlHUD {
   private readonly scrambleBtn: HTMLButtonElement;
   private readonly scrambleIcon: HTMLSpanElement;
   private readonly scrambleText: HTMLSpanElement;
+  private readonly solveBtn: HTMLButtonElement;
+  private readonly solveIcon: HTMLSpanElement;
+  private readonly solveText: HTMLSpanElement;
+  private readonly speedButtons = new Map<MotionSpeed, HTMLButtonElement>();
   private readonly muteBtn: HTMLButtonElement;
   private readonly resetCamBtn: HTMLButtonElement;
   private readonly collapseBtn: HTMLButtonElement;
@@ -41,6 +59,7 @@ export class ControlHUD {
 
   constructor(root: HTMLElement, callbacks: ControlHUDCallbacks) {
     this.root = root;
+    this.callbacks = callbacks;
     this.root.innerHTML = '';
 
     // 1. Top-Left Machine Status Pill
@@ -71,7 +90,25 @@ export class ControlHUD {
     statusPill.append(this.statusSwatch, statusMeta);
     statusCluster.append(statusPill);
 
-    // 2. Bottom Floating Collapsible Control Dock
+    // 2. Top-Right Tactile Audio Mute Toggle
+    const audioCluster = document.createElement('div');
+    audioCluster.className = 'audio-cluster';
+
+    this.muteBtn = document.createElement('button');
+    this.muteBtn.type = 'button';
+    this.muteBtn.className = 'btn-audio-corner';
+    this.muteBtn.setAttribute('data-testid', 'mute-btn');
+    this.muteBtn.setAttribute('aria-label', 'Mute servo audio');
+    this.muteBtn.setAttribute('aria-pressed', 'false');
+    this.muteBtn.title = 'Toggle Servo Audio (M)';
+    this.muteBtn.innerHTML = ICON_SOUND_ON;
+    this.muteBtn.addEventListener('click', () => {
+      const muted = callbacks.onToggleMute();
+      this.setMutedVisual(muted);
+    });
+    audioCluster.append(this.muteBtn);
+
+    // 3. Bottom Floating Collapsible Control Dock
     this.dockWrap = document.createElement('div');
     this.dockWrap.className = 'control-dock-wrap';
 
@@ -123,9 +160,56 @@ export class ControlHUD {
       callbacks.onScramble();
     });
 
-    const divider = document.createElement('div');
-    divider.className = 'dock-divider';
-    divider.setAttribute('aria-hidden', 'true');
+    this.solveBtn = document.createElement('button');
+    this.solveBtn.type = 'button';
+    this.solveBtn.className = 'btn-solve';
+    this.solveBtn.setAttribute('data-mode', 'idle');
+    this.solveBtn.setAttribute('data-testid', 'solve-btn');
+    this.solveBtn.disabled = true;
+
+    this.solveIcon = document.createElement('span');
+    this.solveIcon.innerHTML = ICON_SOLVE;
+    this.solveIcon.style.display = 'inline-flex';
+
+    this.solveText = document.createElement('span');
+    this.solveText.textContent = 'Auto-Solve';
+
+    this.solveBtn.append(this.solveIcon, this.solveText);
+    this.solveBtn.addEventListener('click', () => {
+      callbacks.onAutoSolve();
+    });
+
+    const divider1 = document.createElement('div');
+    divider1.className = 'dock-divider';
+    divider1.setAttribute('aria-hidden', 'true');
+
+    // Compact segmented speed selector (0.5x | 1x | 2x) — always interactive
+    const speedGroup = document.createElement('div');
+    speedGroup.className = 'speed-segmented';
+    speedGroup.setAttribute('role', 'group');
+    speedGroup.setAttribute('aria-label', 'Robot motion speed');
+
+    for (const option of SPEED_OPTIONS) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'speed-btn';
+      btn.textContent = option.label;
+      btn.title = option.title;
+      btn.setAttribute('data-testid', `speed-${option.label}`);
+      btn.setAttribute('aria-pressed', option.value === 1 ? 'true' : 'false');
+      if (option.value === 1) {
+        btn.classList.add('active');
+      }
+      btn.addEventListener('click', () => {
+        callbacks.onSetSpeed(option.value);
+      });
+      this.speedButtons.set(option.value, btn);
+      speedGroup.append(btn);
+    }
+
+    const divider2 = document.createElement('div');
+    divider2.className = 'dock-divider';
+    divider2.setAttribute('aria-hidden', 'true');
 
     this.resetCamBtn = document.createElement('button');
     this.resetCamBtn.type = 'button';
@@ -135,18 +219,6 @@ export class ControlHUD {
     this.resetCamBtn.innerHTML = ICON_RESET_CAM;
     this.resetCamBtn.addEventListener('click', () => callbacks.onResetCamera());
 
-    this.muteBtn = document.createElement('button');
-    this.muteBtn.type = 'button';
-    this.muteBtn.className = 'btn-icon';
-    this.muteBtn.setAttribute('aria-label', 'Mute servo audio');
-    this.muteBtn.setAttribute('aria-pressed', 'false');
-    this.muteBtn.title = 'Toggle Servo Audio (M)';
-    this.muteBtn.innerHTML = ICON_SOUND_ON;
-    this.muteBtn.addEventListener('click', () => {
-      const muted = callbacks.onToggleMute();
-      this.setMutedVisual(muted);
-    });
-
     const hint = document.createElement('span');
     hint.className = 'control-hint';
     hint.textContent = 'Drag: Orbit · Scroll: Zoom';
@@ -154,17 +226,22 @@ export class ControlHUD {
     bar.append(
       this.primaryBtn,
       this.scrambleBtn,
-      divider,
+      this.solveBtn,
+      divider1,
+      speedGroup,
+      divider2,
       this.resetCamBtn,
-      this.muteBtn,
       hint,
     );
     this.dockWrap.append(this.collapseBtn, bar);
 
-    this.root.append(statusCluster, this.dockWrap);
+    this.root.append(statusCluster, audioCluster, this.dockWrap);
 
     this.onKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement
+      ) {
         return;
       }
       if (e.code === 'KeyH') {
@@ -173,6 +250,12 @@ export class ControlHUD {
         callbacks.onResetCamera();
       } else if (e.code === 'KeyM') {
         this.setMutedVisual(callbacks.onToggleMute());
+      } else if (e.key === '1') {
+        callbacks.onSetSpeed(0.5);
+      } else if (e.key === '2') {
+        callbacks.onSetSpeed(1);
+      } else if (e.key === '3') {
+        callbacks.onSetSpeed(2);
       }
     };
     window.addEventListener('keydown', this.onKeyDown);
@@ -208,6 +291,8 @@ export class ControlHUD {
     const showPutDown =
       snapshot.isHolding ||
       snapshot.state === 'SCRAMBLING' ||
+      snapshot.state === 'SOLVING' ||
+      snapshot.state === 'CELEBRATING' ||
       snapshot.state === 'LOWERING' ||
       snapshot.state === 'RELEASING' ||
       snapshot.state === 'RETURNING';
@@ -223,11 +308,34 @@ export class ControlHUD {
     this.scrambleIcon.innerHTML =
       snapshot.scrambleButtonMode === 'stop' ? ICON_STOP : ICON_SCRAMBLE;
 
+    // Auto-Solve button state & styling
+    const solveMode = snapshot.isSolving
+      ? 'solving'
+      : snapshot.isSolvedBadge
+        ? 'solved'
+        : snapshot.isScrambled && !snapshot.isBusy
+          ? 'ready'
+          : 'idle';
+    this.solveBtn.disabled = snapshot.solveButtonDisabled;
+    this.solveBtn.setAttribute('data-mode', solveMode);
+    this.solveText.textContent = snapshot.solveButtonLabel;
+    this.solveIcon.innerHTML = snapshot.isSolvedBadge ? ICON_CHECK : ICON_SOLVE;
+
+    // Segmented motion speed selector state
+    for (const [speedVal, btn] of this.speedButtons.entries()) {
+      const isActive = snapshot.speedMultiplier === speedVal;
+      btn.classList.toggle('active', isActive);
+      btn.setAttribute('aria-pressed', String(isActive));
+    }
+
     // Expose machine state cleanly on body for accessibility & automated checks
     document.body.dataset.machineState = snapshot.state;
     document.body.dataset.scrambled = String(snapshot.isScrambled);
     document.body.dataset.stopping = String(snapshot.isStoppingScramble);
+    document.body.dataset.solving = String(snapshot.isSolving);
     document.body.dataset.moveHistoryCount = String(snapshot.moveHistoryCount);
+    document.body.dataset.speed = String(snapshot.speedMultiplier);
+    document.body.dataset.cubeSolved = String(this.callbacks.isCubeSolved());
   }
 
   dispose(): void {

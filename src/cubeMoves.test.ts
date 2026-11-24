@@ -5,9 +5,11 @@ import * as THREE from 'three';
 import {
   ContinuousScrambleGenerator,
   MOVE_SPECS,
+  computeOptimizedSolution,
   generateScrambleSequence,
   getInverseMove,
   getMoveSpec,
+  optimizeMoveSequence,
   snapQuaternionToExact90,
   type CubeFace,
   type CubeMoveNotation,
@@ -255,4 +257,75 @@ test('ContinuousScrambleGenerator produces 200+ evenly balanced non-redundant mo
     `Expected even distribution across 6 faces over 200 moves, got ${JSON.stringify(gen.getFaceCounts())}`,
   );
 });
+
+test('optimizeMoveSequence cancels inverse pairs, collapses triples, quads, commuting opposite faces, and cascades', () => {
+  // Adjacent inverse cancellation
+  assert.deepEqual(optimizeMoveSequence(['L', "L'"]), []);
+  assert.deepEqual(optimizeMoveSequence(['R', 'U', "U'", "R'"]), []);
+
+  // Triple identical move collapse: U U U -> U' and R' R' R' -> R
+  assert.deepEqual(optimizeMoveSequence(['U', 'U', 'U']), ["U'"]);
+  assert.deepEqual(optimizeMoveSequence(["R'", "R'", "R'"]), ['R']);
+
+  // Quad identical cancellation: F F F F -> []
+  assert.deepEqual(optimizeMoveSequence(['F', 'F', 'F', 'F']), []);
+
+  // Commuting opposite faces: R L R' -> L
+  assert.deepEqual(optimizeMoveSequence(['R', 'L', "R'"]), ['L']);
+
+  // Cascading cancellation across multiple axes: F U R L R' L' U' F' -> []
+  assert.deepEqual(
+    optimizeMoveSequence(['F', 'U', 'R', 'L', "R'", "L'", "U'", "F'"]),
+    [],
+  );
+
+  // Mixed sequence preserving non-redundant moves
+  assert.deepEqual(
+    optimizeMoveSequence(['R', 'U', 'U', 'U', 'F', "F'", 'D']),
+    ['R', "U'", 'D'],
+  );
+});
+
+test('computeOptimizedSolution solves back-to-back scrambles on RubiksCube back to 100% solved state with zero drift', () => {
+  const materials = createHeadlessMaterials();
+  const cube = new RubiksCube(materials);
+  assert.equal(cube.isSolved(), true);
+
+  // Perform two back-to-back scrambles + redundant junction moves to exercise optimizer
+  const scramble1 = generateScrambleSequence(makeSeededRng(303));
+  const scramble2 = generateScrambleSequence(makeSeededRng(404));
+  const junction: CubeMoveNotation[] = ['U', 'U', 'U', 'R', "R'", 'L', 'R', "L'"];
+  const combined: CubeMoveNotation[] = [...scramble1, ...junction, ...scramble2];
+
+  for (const move of combined) {
+    cube.beginMove(move);
+    cube.setActiveMoveProgress(1);
+    cube.commitActiveMove(true);
+  }
+
+  assert.equal(cube.isSolved(), false);
+  assert.equal(cube.getMoveHistory().length, combined.length);
+
+  const solution = computeOptimizedSolution(cube.getMoveHistory());
+  // Optimizer must strictly reduce the redundant junction moves
+  assert.ok(
+    solution.length < combined.length,
+    `Expected optimized solution (${solution.length}) to be shorter than raw history (${combined.length})`,
+  );
+
+  for (const move of solution) {
+    cube.beginMove(move);
+    cube.setActiveMoveProgress(0.5);
+    cube.setActiveMoveProgress(1);
+    cube.commitActiveMove(false);
+  }
+
+  cube.clearMoveHistory();
+  assert.equal(cube.getMoveHistory().length, 0);
+  assert.equal(cube.isSolved(), true, 'Cube must be 100% solved after optimized Auto-Solve');
+
+  cube.dispose();
+  materials.dispose();
+});
+
 

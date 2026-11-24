@@ -93,8 +93,11 @@ async function bootstrap(): Promise<void> {
     hud = new ControlHUD(hudRoot, {
       onPrimaryAction: () => workbenchScene.triggerPrimaryAction(),
       onScramble: () => workbenchScene.toggleScramble(),
+      onAutoSolve: () => workbenchScene.triggerAutoSolve(),
+      onSetSpeed: (speed) => workbenchScene.setSpeedMultiplier(speed),
       onResetCamera: () => workbenchScene.resetCameraView(),
       onToggleMute: () => workbenchScene.toggleMute(),
+      isCubeSolved: () => workbenchScene.isCubeSolved(),
     });
   }
 
