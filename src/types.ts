@@ -1,14 +1,17 @@
+import type {CubeMoveNotation} from './cubeMoves';
+
 export type MachineState =
   | 'STANDBY'
   | 'APPROACHING'
   | 'GRIPPING'
   | 'LIFTING'
   | 'HOLDING'
+  | 'SCRAMBLING'
   | 'LOWERING'
   | 'RELEASING'
   | 'RETURNING';
 
-export type ArmLedMode = 'idle' | 'moving' | 'gripping';
+export type ArmLedMode = 'idle' | 'moving' | 'gripping' | 'scrambling';
 
 export type ArmSide = 'left' | 'right';
 
@@ -34,12 +37,18 @@ export interface ArmJointAngles {
   shoulderPitch: number;
   /** Relative elbow pitch angle from lower boom to forearm (radians, negative bends downward). */
   elbowPitch: number;
-  /** Relative wrist pitch angle keeping the gripper level in world space (radians). */
+  /** Relative wrist pitch angle keeping the gripper aligned in world space (radians). */
   wristPitch: number;
-  /** Wrist roll around the gripper's inward X axis (radians) — ready for Parts 2 & 3 twists. */
+  /** Wrist roll around the gripper's inward axis (radians). */
   wristRoll: number;
   /** Normalized jaw opening: 0 = exact clamp contact on cube, 1 = fully open standby. */
   jawOpen: number;
+}
+
+export interface ScrambleProgress {
+  moveIndex: number; // 1-based current move index
+  totalMoves: number;
+  currentMove: CubeMoveNotation;
 }
 
 export interface MachineSnapshot {
@@ -48,8 +57,12 @@ export interface MachineSnapshot {
   ledMode: ArmLedMode;
   isBusy: boolean;
   isHolding: boolean;
+  isScrambled: boolean;
   primaryButtonLabel: string;
+  scrambleButtonLabel: string;
   phaseProgress: number;
+  scrambleProgress: ScrambleProgress | null;
+  moveHistoryCount: number;
 }
 
 export const MACHINE_STATUS_LABELS: Record<MachineState, string> = {
@@ -58,6 +71,7 @@ export const MACHINE_STATUS_LABELS: Record<MachineState, string> = {
   GRIPPING: 'GRIPPING',
   LIFTING: 'GRIPPING — LIFTING',
   HOLDING: 'HOLDING — READY',
+  SCRAMBLING: 'SCRAMBLING',
   LOWERING: 'GRIPPING — LOWERING',
   RELEASING: 'RELEASING',
   RETURNING: 'RETURNING',
@@ -71,6 +85,8 @@ export function getArmLedMode(state: MachineState): ArmLedMode {
     case 'RELEASING':
     case 'RETURNING':
       return 'moving';
+    case 'SCRAMBLING':
+      return 'scrambling';
     case 'GRIPPING':
     case 'LIFTING':
     case 'HOLDING':

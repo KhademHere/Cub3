@@ -13,6 +13,7 @@ const LED_PALETTE: Record<ArmLedMode, {color: number; emissive: number; intensit
   idle: {color: 0x38bdf8, emissive: 0x06b6d4, intensity: 1.55},
   moving: {color: 0xfbbf24, emissive: 0xf59e0b, intensity: 2.1},
   gripping: {color: 0x34d399, emissive: 0x10b981, intensity: 2.25},
+  scrambling: {color: 0xfbbf24, emissive: 0xf59e0b, intensity: 2.35},
 };
 
 /**
@@ -47,6 +48,8 @@ export class RoboticArm extends THREE.Group {
   private readonly targetLedColor = new THREE.Color(LED_PALETTE.idle.color);
   private readonly targetLedEmissive = new THREE.Color(LED_PALETTE.idle.emissive);
   private targetLedIntensity = LED_PALETTE.idle.intensity;
+  private ledMode: ArmLedMode = 'idle';
+  private ledPulseTime = 0;
 
   private readonly ownedGeometries: THREE.BufferGeometry[] = [];
 

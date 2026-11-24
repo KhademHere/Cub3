@@ -4,6 +4,7 @@ import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
 import * as xb from 'xrblocks';
 
 import {AnimationController} from './AnimationController';
+import type {CubeMoveNotation} from './cubeMoves';
 import {LAB_DIMENSIONS} from './kinematics';
 import {createLabMaterials, type LabMaterialLibrary} from './materials';
 import {RoboticArm} from './RoboticArm';
@@ -49,6 +50,7 @@ export class WorkbenchScene extends xb.Script {
   private xrCard: xb.UICard | null = null;
   private xrStatusText: xb.UIText | null = null;
   private xrActionButton: xb.UIButton | null = null;
+  private xrScrambleButton: xb.UIButton | null = null;
   private unsubscribeController: (() => void) | null = null;
   private onXrVisibilityChange?: (inXr: boolean) => void;
 
@@ -123,11 +125,18 @@ export class WorkbenchScene extends xb.Script {
     this.unsubscribeController = this.controller.subscribe((snapshot) => {
       this.onSnapshotCallback?.(snapshot);
       if (this.xrStatusText) {
-        this.xrStatusText.text = snapshot.statusLabel;
+        // Keep spatial MSDF text ASCII-safe to prevent missing-glyph warnings
+        this.xrStatusText.text = snapshot.statusLabel
+          .replace(/•/g, '-')
+          .replace(/—/g, '-');
       }
       if (this.xrActionButton) {
         this.xrActionButton.label = snapshot.primaryButtonLabel;
         this.xrActionButton.disabled = snapshot.isBusy;
+      }
+      if (this.xrScrambleButton) {
+        this.xrScrambleButton.label = snapshot.scrambleButtonLabel;
+        this.xrScrambleButton.disabled = snapshot.isBusy;
       }
     });
 
@@ -404,13 +413,20 @@ export class WorkbenchScene extends xb.Script {
     });
     this.xrActionButton = new xb.UIButton({
       label: 'Pick Up Cube',
-      style: {width: '100%'},
+      style: {flexGrow: 1},
       onClick: () => {
         this.triggerPrimaryAction();
       },
     });
+    this.xrScrambleButton = new xb.UIButton({
+      label: 'Scramble',
+      style: {flexGrow: 1},
+      onClick: () => {
+        this.triggerScramble();
+      },
+    });
     this.xrCard = new xb.UICard({
-      size: {width: 0.42, height: 'auto'},
+      size: {width: 0.52, height: 'auto'},
       manipulation: true,
       edge: true,
       style: {
@@ -424,7 +440,10 @@ export class WorkbenchScene extends xb.Script {
           style: {fontSize: 16, opacity: 0.72, textAlign: 'center'},
         }),
         this.xrStatusText,
-        this.xrActionButton,
+        new xb.UIPanel({
+          style: {width: '100%', flexDirection: 'row', gap: 10},
+          children: [this.xrActionButton, this.xrScrambleButton],
+        }),
       ],
     });
     // Positioned neatly at the front-right corner of the workbench for XR headset reach
@@ -478,6 +497,10 @@ export class WorkbenchScene extends xb.Script {
     return this.controller?.togglePickUpPutDown() ?? false;
   }
 
+  triggerScramble(customSequence?: CubeMoveNotation[]): boolean {
+    return this.controller?.triggerScramble(customSequence) ?? false;
+  }
+
   resetCameraView(): void {
     if (!this.controls) return;
     if (this.isSoftwareGl) {
@@ -502,8 +525,14 @@ export class WorkbenchScene extends xb.Script {
   }
 
   update(): void {
-    const dt = Math.min(xb.getDeltaTime(), 0.25);
-    this.controller.update(dt);
+    const maxFrameDt = this.isSoftwareGl ? 1.0 : 0.1;
+    const dt = Math.min(xb.getDeltaTime(), maxFrameDt);
+    let remaining = dt;
+    while (remaining > 1e-6) {
+      const slice = Math.min(remaining, 0.1);
+      this.controller.update(slice);
+      remaining -= slice;
+    }
 
     const isPresenting =
       xb.core.renderer instanceof THREE.WebGLRenderer &&

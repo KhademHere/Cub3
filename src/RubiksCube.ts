@@ -1,6 +1,12 @@
 import * as THREE from 'three';
 import {RoundedBoxGeometry} from 'three/addons/geometries/RoundedBoxGeometry.js';
 
+import {
+  getMoveSpec,
+  snapQuaternionToExact90,
+  type CubeMoveNotation,
+  type CubeMoveSpec,
+} from './cubeMoves';
 import {LAB_DIMENSIONS} from './kinematics';
 import type {LabMaterialLibrary} from './materials';
 import type {CubieCoord, FaceAxis, FaceLayer} from './types';
@@ -47,7 +53,8 @@ function createRoundedTileGeometry(
 
 /**
  * Modular 3x3x3 Rubik's Cube constructed from 27 individual rounded cubies
- * with a clean internal pivot-rotation structure ready for Parts 2 & 3 face turns.
+ * with an exact 90-degree face-turn pivot engine, zero-drift orthogonal snapping,
+ * and persistent `moveHistory` ready for Part 2 (Scramble) & Part 3 (Auto-Solve).
  */
 export class RubiksCube extends THREE.Group {
   public readonly cubies: CubieUnit[] = [];
@@ -55,9 +62,13 @@ export class RubiksCube extends THREE.Group {
   public readonly cubieSpacing: number;
   public readonly totalSize: number;
 
+  /** Persistent ordered record of every committed face turn for Part 3 (Auto-Solve). */
+  public readonly moveHistory: CubeMoveNotation[] = [];
+
   private readonly cubieBodyGeometry: THREE.BufferGeometry;
   private readonly tileGeometry: THREE.BufferGeometry;
   private activeLayerCubies: CubieUnit[] = [];
+  private activeMoveSpec: CubeMoveSpec | null = null;
 
   constructor(materials: LabMaterialLibrary) {
     super();
@@ -183,11 +194,64 @@ export class RubiksCube extends THREE.Group {
   }
 
   /**
-   * Returns the 9 cubies currently occupying a specific face layer.
-   * Ready for Part 2 (Scramble) & Part 3 (Auto-Solve) 90-degree face turns.
+   * Identifies the 9 cubies belonging to the requested layer by rounding
+   * each cubie's local position to exact integer grid coordinates (-1, 0, 1).
    */
   getLayerCubies(axis: FaceAxis, layer: FaceLayer): CubieUnit[] {
-    return this.cubies.filter((unit) => unit.coord[axis] === layer);
+    return this.cubies.filter((unit) => {
+      const snapped = (Math.round(unit.group.position[axis] / this.cubieSpacing) ||
+        0) as FaceLayer;
+      return snapped === layer;
+    });
+  }
+
+  /**
+   * Begins an animated 90-degree face turn for standard cube notation (`U`, `R'`, etc.).
+   * Attaches the 9 target layer cubies to `pivotGroup`.
+   */
+  beginMove(notation: CubeMoveNotation): CubeMoveSpec {
+    if (this.activeMoveSpec) {
+      this.commitActiveMove();
+    }
+    const spec = getMoveSpec(notation);
+    this.activeMoveSpec = spec;
+    this.beginFaceTurn(spec.axis, spec.layer);
+    return spec;
+  }
+
+  /**
+   * Updates the active pivot rotation smoothly using eased progress `t ∈ [0, 1]`.
+   */
+  setActiveMoveProgress(easedProgress: number): void {
+    if (!this.activeMoveSpec) return;
+    this.pivotGroup.rotation.set(0, 0, 0);
+    this.pivotGroup.rotation[this.activeMoveSpec.axis] =
+      this.activeMoveSpec.angleRad * easedProgress;
+  }
+
+  /**
+   * Commits the active face turn, snaps all moved cubies to exact integer grid
+   * positions and exact 90-degree orthogonal quaternions, and appends to `moveHistory`.
+   */
+  commitActiveMove(recordHistory = true): void {
+    if (!this.activeMoveSpec) return;
+    const spec = this.activeMoveSpec;
+    this.activeMoveSpec = null;
+    this.commitFaceTurn(spec.axis, spec.quarterTurns);
+    if (recordHistory) {
+      this.moveHistory.push(spec.notation);
+    }
+  }
+
+  /** Convenience helper for instant deterministic execution (used in tests/solvers). */
+  applyMoveInstant(notation: CubeMoveNotation, recordHistory = true): void {
+    this.beginMove(notation);
+    this.setActiveMoveProgress(1);
+    this.commitActiveMove(recordHistory);
+  }
+
+  getMoveHistory(): readonly CubeMoveNotation[] {
+    return this.moveHistory;
   }
 
   /**
@@ -197,7 +261,7 @@ export class RubiksCube extends THREE.Group {
   beginFaceTurn(axis: FaceAxis, layer: FaceLayer): THREE.Group {
     this.pivotGroup.rotation.set(0, 0, 0);
     this.pivotGroup.position.set(0, 0, 0);
-    this.pivotGroup.updateMatrixWorld(true);
+    this.updateMatrixWorld(true);
 
     this.activeLayerCubies = this.getLayerCubies(axis, layer);
     for (const unit of this.activeLayerCubies) {
@@ -207,22 +271,23 @@ export class RubiksCube extends THREE.Group {
   }
 
   /**
-   * Commits a finished face turn back into the cube root and snaps all cubie
-   * positions & orientations to exact 90-degree lattice increments to eliminate
-   * floating-point drift over long Scramble/Auto-Solve sequences.
+   * Commits a finished face turn back into the cube root and enforces strict
+   * zero-drift snapping on both local grid coordinates (-1, 0, 1) and exact
+   * 90-degree orthogonal quaternions.
    */
   commitFaceTurn(axis: FaceAxis, quarterTurns: number): void {
     const angle = quarterTurns * (Math.PI / 2);
+    this.pivotGroup.rotation.set(0, 0, 0);
     this.pivotGroup.rotation[axis] = angle;
-    this.pivotGroup.updateMatrixWorld(true);
+    this.updateMatrixWorld(true);
 
     for (const unit of this.activeLayerCubies) {
       this.attach(unit.group);
 
-      // Snap logical grid coordinates & exact local position
-      const nx = Math.round(unit.group.position.x / this.cubieSpacing) as FaceLayer;
-      const ny = Math.round(unit.group.position.y / this.cubieSpacing) as FaceLayer;
-      const nz = Math.round(unit.group.position.z / this.cubieSpacing) as FaceLayer;
+      // 1. Snap logical grid coordinates & exact local position (normalize -0 to +0)
+      const nx = (Math.round(unit.group.position.x / this.cubieSpacing) || 0) as FaceLayer;
+      const ny = (Math.round(unit.group.position.y / this.cubieSpacing) || 0) as FaceLayer;
+      const nz = (Math.round(unit.group.position.z / this.cubieSpacing) || 0) as FaceLayer;
       unit.coord.x = nx;
       unit.coord.y = ny;
       unit.coord.z = nz;
@@ -232,15 +297,14 @@ export class RubiksCube extends THREE.Group {
         nz * this.cubieSpacing,
       );
 
-      // Snap Euler angles to exact 90° multiples
-      const e = unit.group.rotation;
-      const snap = (rad: number) =>
-        Math.round(rad / (Math.PI / 2)) * (Math.PI / 2);
-      unit.group.rotation.set(snap(e.x), snap(e.y), snap(e.z));
+      // 2. Snap quaternion to exact orthogonal 90-degree matrix (zero drift!)
+      snapQuaternionToExact90(unit.group.quaternion);
+      unit.group.rotation.setFromQuaternion(unit.group.quaternion);
     }
 
     this.pivotGroup.rotation.set(0, 0, 0);
     this.activeLayerCubies = [];
+    this.updateMatrixWorld(true);
   }
 
   dispose(): void {

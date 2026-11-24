@@ -63,9 +63,19 @@ export class ServoAudio {
       case 'RETURNING':
         this.playServoSweep(260, 165, 0.55, 0.028);
         break;
+      case 'SCRAMBLING':
+        this.playServoSweep(290, 440, 0.3, 0.03);
+        break;
       case 'STANDBY':
         break;
     }
+  }
+
+  /** Plays a crisp, weighted wrist-actuator twist cue for each 90-degree face turn. */
+  playFaceTwistCue(prime: boolean): void {
+    if (this.muted || !this.ctx || this.ctx.state !== 'running') return;
+    this.playServoSweep(prime ? 350 : 280, prime ? 250 : 410, 0.24, 0.026);
+    this.playClampClick(prime ? 580 : 660, 0.022);
   }
 
   private playServoSweep(

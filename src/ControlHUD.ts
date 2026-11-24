@@ -2,12 +2,14 @@ import type {MachineSnapshot} from './types';
 
 export interface ControlHUDCallbacks {
   onPrimaryAction: () => void;
+  onScramble: () => void;
   onResetCamera: () => void;
   onToggleMute: () => boolean;
 }
 
 const ICON_PICKUP = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>`;
 const ICON_PUTDOWN = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>`;
+const ICON_SCRAMBLE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`;
 const ICON_RESET_CAM = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`;
 const ICON_SOUND_ON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
 const ICON_SOUND_OFF = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`;
@@ -25,6 +27,8 @@ export class ControlHUD {
   private readonly primaryBtn: HTMLButtonElement;
   private readonly primaryIcon: HTMLSpanElement;
   private readonly primaryText: HTMLSpanElement;
+  private readonly scrambleBtn: HTMLButtonElement;
+  private readonly scrambleText: HTMLSpanElement;
   private readonly muteBtn: HTMLButtonElement;
   private readonly resetCamBtn: HTMLButtonElement;
   private readonly collapseBtn: HTMLButtonElement;
@@ -99,6 +103,24 @@ export class ControlHUD {
       callbacks.onPrimaryAction();
     });
 
+    this.scrambleBtn = document.createElement('button');
+    this.scrambleBtn.type = 'button';
+    this.scrambleBtn.className = 'btn-scramble';
+    this.scrambleBtn.setAttribute('data-active', 'false');
+    this.scrambleBtn.setAttribute('data-testid', 'scramble-btn');
+
+    const scrambleIcon = document.createElement('span');
+    scrambleIcon.innerHTML = ICON_SCRAMBLE;
+    scrambleIcon.style.display = 'inline-flex';
+
+    this.scrambleText = document.createElement('span');
+    this.scrambleText.textContent = 'Scramble';
+
+    this.scrambleBtn.append(scrambleIcon, this.scrambleText);
+    this.scrambleBtn.addEventListener('click', () => {
+      callbacks.onScramble();
+    });
+
     const divider = document.createElement('div');
     divider.className = 'dock-divider';
     divider.setAttribute('aria-hidden', 'true');
@@ -127,7 +149,14 @@ export class ControlHUD {
     hint.className = 'control-hint';
     hint.textContent = 'Drag: Orbit · Scroll: Zoom';
 
-    bar.append(this.primaryBtn, divider, this.resetCamBtn, this.muteBtn, hint);
+    bar.append(
+      this.primaryBtn,
+      this.scrambleBtn,
+      divider,
+      this.resetCamBtn,
+      this.muteBtn,
+      hint,
+    );
     this.dockWrap.append(this.collapseBtn, bar);
 
     this.root.append(statusCluster, this.dockWrap);
@@ -174,16 +203,29 @@ export class ControlHUD {
     this.statusSwatch.setAttribute('data-led', snapshot.ledMode);
     this.statusValue.textContent = snapshot.statusLabel;
 
+    const showPutDown =
+      snapshot.isHolding ||
+      snapshot.state === 'SCRAMBLING' ||
+      snapshot.state === 'LOWERING' ||
+      snapshot.state === 'RELEASING' ||
+      snapshot.state === 'RETURNING';
+
     this.primaryBtn.disabled = snapshot.isBusy;
-    this.primaryBtn.setAttribute(
-      'data-mode',
-      snapshot.isHolding ? 'putdown' : 'pickup',
-    );
+    this.primaryBtn.setAttribute('data-mode', showPutDown ? 'putdown' : 'pickup');
     this.primaryText.textContent = snapshot.primaryButtonLabel;
-    this.primaryIcon.innerHTML = snapshot.isHolding ? ICON_PUTDOWN : ICON_PICKUP;
+    this.primaryIcon.innerHTML = showPutDown ? ICON_PUTDOWN : ICON_PICKUP;
+
+    this.scrambleBtn.disabled = snapshot.isBusy;
+    this.scrambleBtn.setAttribute(
+      'data-active',
+      snapshot.state === 'SCRAMBLING' ? 'true' : 'false',
+    );
+    this.scrambleText.textContent = snapshot.scrambleButtonLabel;
 
     // Expose machine state cleanly on body for accessibility & automated checks
     document.body.dataset.machineState = snapshot.state;
+    document.body.dataset.scrambled = String(snapshot.isScrambled);
+    document.body.dataset.moveHistoryCount = String(snapshot.moveHistoryCount);
   }
 
   dispose(): void {

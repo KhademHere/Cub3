@@ -47,7 +47,7 @@ function startSoftwarePacedLoop(renderer: THREE.WebGLRenderer): () => void {
         timerId = window.setTimeout(poll, 5);
       } else {
         if (sync) gl.deleteSync(sync);
-        timerId = window.setTimeout(cb, 80);
+        timerId = window.setTimeout(cb, 24);
       }
     };
     timerId = window.setTimeout(poll, 5);
@@ -56,7 +56,7 @@ function startSoftwarePacedLoop(renderer: THREE.WebGLRenderer): () => void {
   const tick = () => {
     if (stopped) return;
     const now = performance.now();
-    const dtMs = Math.min(250, Math.max(16, now - lastTime));
+    const dtMs = Math.min(1000, Math.max(16, now - lastTime));
     lastTime = now;
     xb.core.stepFrame(dtMs);
     afterDraw(tick);
@@ -92,6 +92,7 @@ async function bootstrap(): Promise<void> {
   if (hudRoot) {
     hud = new ControlHUD(hudRoot, {
       onPrimaryAction: () => workbenchScene.triggerPrimaryAction(),
+      onScramble: () => workbenchScene.triggerScramble(),
       onResetCamera: () => workbenchScene.resetCameraView(),
       onToggleMute: () => workbenchScene.toggleMute(),
     });

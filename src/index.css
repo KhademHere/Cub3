@@ -145,6 +145,10 @@ canvas {
   background-color: var(--accent-emerald);
 }
 
+.status-swatch[data-led='scrambling'] {
+  background-color: var(--accent-amber);
+}
+
 .status-meta {
   display: flex;
   align-items: baseline;
@@ -180,7 +184,7 @@ canvas {
   align-items: center;
   gap: 8px;
   pointer-events: none;
-  max-width: min(640px, 94vw);
+  max-width: min(820px, 95vw);
   transition: transform 0.26s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
@@ -231,6 +235,7 @@ canvas {
   border-radius: 10px;
   padding: 11px 22px;
   min-width: 176px;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -272,7 +277,58 @@ canvas {
   transform: none;
 }
 
+.btn-scramble {
+  appearance: none;
+  border: 1px solid var(--lab-border-strong);
+  border-radius: 10px;
+  padding: 10px 20px;
+  min-width: 174px;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  background: rgba(30, 41, 59, 0.92);
+  color: var(--lab-text);
+  transition:
+    background-color 0.16s ease,
+    border-color 0.16s ease,
+    color 0.16s ease,
+    transform 0.12s ease,
+    opacity 0.16s ease;
+}
+
+.btn-scramble:hover:not(:disabled) {
+  background: rgba(43, 57, 79, 0.96);
+  border-color: var(--accent-amber);
+  color: #fef3c7;
+  transform: translateY(-1px);
+}
+
+.btn-scramble:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.btn-scramble[data-active='true'] {
+  border-color: rgba(245, 158, 11, 0.72);
+  color: #fde68a;
+  background: rgba(120, 53, 15, 0.42);
+}
+
+.btn-scramble:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .btn-primary:focus-visible,
+.btn-scramble:focus-visible,
 .btn-icon:focus-visible,
 .dock-collapse-btn:focus-visible {
   outline: 2px solid var(--accent-cyan);
@@ -337,8 +393,14 @@ canvas {
   }
 
   .btn-primary {
-    min-width: 156px;
-    padding: 10px 18px;
-    font-size: 13.5px;
+    min-width: 144px;
+    padding: 10px 14px;
+    font-size: 13px;
+  }
+
+  .btn-scramble {
+    min-width: 118px;
+    padding: 9px 14px;
+    font-size: 13px;
   }
 }
