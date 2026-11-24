@@ -1,0 +1,6 @@
+{
+  "name": "CubeBotics — 3D Rubik's Cube Robotics Lab",
+  "description": "Interactive 3D robotics lab featuring dual articulated industrial manipulator arms and a precision 3x3x3 Rubik's Cube with smooth pick-up and put-down choreography.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
