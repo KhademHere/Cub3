@@ -45,10 +45,13 @@ export interface ArmJointAngles {
   jawOpen: number;
 }
 
+export type ScrambleButtonMode = 'start' | 'stop' | 'busy';
+
 export interface ScrambleProgress {
-  moveIndex: number; // 1-based current move index
-  totalMoves: number;
+  /** 1-based open-ended live move number across scramble sessions. */
+  moveNumber: number;
   currentMove: CubeMoveNotation;
+  isStopping: boolean;
 }
 
 export interface MachineSnapshot {
@@ -58,8 +61,13 @@ export interface MachineSnapshot {
   isBusy: boolean;
   isHolding: boolean;
   isScrambled: boolean;
+  isScrambling: boolean;
+  isStoppingScramble: boolean;
   primaryButtonLabel: string;
+  primaryButtonDisabled: boolean;
   scrambleButtonLabel: string;
+  scrambleButtonMode: ScrambleButtonMode;
+  scrambleButtonDisabled: boolean;
   phaseProgress: number;
   scrambleProgress: ScrambleProgress | null;
   moveHistoryCount: number;

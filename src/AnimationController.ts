@@ -68,7 +68,21 @@ export class AnimationController {
   }
 
   /**
-   * Triggers a balanced 14-16 move robotic scramble.
+   * Toggles indefinite continuous scrambling ("Scramble" ↔ "Stop Scramble"):
+   * auto-lifts from STANDBY, resumes smoothly from HOLDING, or requests a graceful stop if active.
+   */
+  toggleScramble(): boolean {
+    this.audio.unlock();
+    return this.choreography.toggleScramble();
+  }
+
+  /** Requests a graceful stop after the currently executing face turn finishes. */
+  requestStopScramble(): boolean {
+    return this.choreography.requestStopScramble();
+  }
+
+  /**
+   * Triggers either continuous scrambling or an explicit deterministic move queue.
    * Automatically lifts the cube first if currently resting in STANDBY.
    */
   triggerScramble(customSequence?: CubeMoveNotation[]): boolean {

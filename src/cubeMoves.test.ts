@@ -3,6 +3,7 @@ import test from 'node:test';
 import * as THREE from 'three';
 
 import {
+  ContinuousScrambleGenerator,
   MOVE_SPECS,
   generateScrambleSequence,
   getInverseMove,
@@ -219,3 +220,39 @@ test('RubiksCube executes 2 consecutive scrambles (32 moves) with zero drift and
   cube.dispose();
   materials.dispose();
 });
+
+test('ContinuousScrambleGenerator produces 200+ evenly balanced non-redundant moves on the fly', () => {
+  const opposite: Record<CubeFace, CubeFace> = {
+    U: 'D',
+    D: 'U',
+    L: 'R',
+    R: 'L',
+    F: 'B',
+    B: 'F',
+  };
+
+  const gen = new ContinuousScrambleGenerator(makeSeededRng(777));
+  const moves: CubeMoveNotation[] = [];
+  for (let i = 0; i < 200; i++) {
+    const move = gen.next();
+    moves.push(move);
+    const face = getMoveSpec(move).face;
+    if (i > 0) {
+      assert.notEqual(face, getMoveSpec(moves[i - 1]).face);
+    }
+    if (i > 1) {
+      const prev = getMoveSpec(moves[i - 1]).face;
+      const prevPrev = getMoveSpec(moves[i - 2]).face;
+      assert.ok(!(face === prevPrev && prev === opposite[face]));
+    }
+  }
+
+  const counts = Object.values(gen.getFaceCounts());
+  const minCount = Math.min(...counts);
+  const maxCount = Math.max(...counts);
+  assert.ok(
+    maxCount - minCount <= 2,
+    `Expected even distribution across 6 faces over 200 moves, got ${JSON.stringify(gen.getFaceCounts())}`,
+  );
+});
+

@@ -253,3 +253,132 @@ test('all 12 face moves stay inside IK workspace envelope with tabletop clearanc
   assert.equal(twistsObserved, 12);
 });
 
+test('indefinite continuous scramble runs past 26+ moves, stops gracefully mid-twist, resumes without resetting history, and puts down cleanly', () => {
+  let seed = 424242;
+  const rng = () => {
+    seed = (1664525 * seed + 1013904223) >>> 0;
+    return seed / 0x100000000;
+  };
+  const choreo = new RoboticsChoreography({}, rng);
+  const committedHistory: CubeMoveNotation[] = [];
+
+  // 1. Auto-lift start from STANDBY via toggleScramble()
+  assert.equal(choreo.toggleScramble(), true);
+  assert.equal(choreo.getState(), 'APPROACHING');
+  assert.equal(choreo.getSnapshot().primaryButtonDisabled, true);
+  assert.equal(choreo.getSnapshot().scrambleButtonDisabled, true);
+  assert.equal(choreo.getSnapshot().scrambleButtonLabel, 'Lifting...');
+
+  // Step through lift and run continuously past 26 moves (proving no 16-move cap!)
+  let sawActiveStopButton = false;
+  let sawOpenEndedStatus = false;
+  let steps = 0;
+  while (committedHistory.length < 26 && steps < 10000) {
+    const frame = choreo.step(0.02);
+    committedHistory.push(...frame.committedMoves);
+    if (frame.snapshot.state === 'SCRAMBLING') {
+      assert.equal(frame.snapshot.primaryButtonDisabled, true);
+      assert.equal(frame.snapshot.scrambleButtonDisabled, false);
+      assert.equal(frame.snapshot.scrambleButtonMode, 'stop');
+      assert.equal(frame.snapshot.scrambleButtonLabel, 'Stop Scramble');
+      assert.equal(choreo.triggerPrimaryAction(), false);
+      sawActiveStopButton = true;
+      if (/^SCRAMBLING • Move \d+ \([UDLRFB]'?\)$/.test(frame.snapshot.statusLabel)) {
+        sawOpenEndedStatus = true;
+      }
+    }
+    steps += 1;
+  }
+
+  assert.equal(sawActiveStopButton, true);
+  assert.equal(sawOpenEndedStatus, true);
+  assert.ok(committedHistory.length >= 26, `Expected >= 26 moves, got ${committedHistory.length}`);
+  assert.equal(choreo.getState(), 'SCRAMBLING');
+
+  // 2. Advance until the next move (move 27) is actively mid-twist, then click Stop Scramble!
+  let stopTriggeredMidTwist = false;
+  let activeMoveAtStop: CubeMoveNotation | null = null;
+  steps = 0;
+  while (!stopTriggeredMidTwist && steps < 500) {
+    const frame = choreo.step(0.02);
+    committedHistory.push(...frame.committedMoves);
+    if (
+      frame.activeFaceTurn &&
+      frame.activeFaceTurn.easedProgress > 0.25 &&
+      frame.activeFaceTurn.easedProgress < 0.75
+    ) {
+      activeMoveAtStop = frame.activeFaceTurn.move;
+      assert.equal(choreo.toggleScramble(), true);
+      stopTriggeredMidTwist = true;
+    }
+    steps += 1;
+  }
+
+  assert.equal(stopTriggeredMidTwist, true, 'Expected to catch an active mid-twist frame');
+  const stoppingSnap = choreo.getSnapshot();
+  assert.equal(stoppingSnap.state, 'SCRAMBLING');
+  assert.equal(stoppingSnap.isStoppingScramble, true);
+  assert.ok(stoppingSnap.statusLabel.startsWith('STOPPING...'));
+  assert.equal(stoppingSnap.scrambleButtonDisabled, true);
+  assert.equal(stoppingSnap.primaryButtonDisabled, true);
+  // Second stop click while already stopping is cleanly ignored
+  assert.equal(choreo.toggleScramble(), false);
+
+  // 3. Step until the current move finishes its twist + neutral regrip and halts cleanly in HOLDING
+  let lastFrame = choreo.evaluateFrame();
+  steps = 0;
+  while (choreo.getState() !== 'HOLDING' && steps < 1000) {
+    lastFrame = choreo.step(0.02);
+    committedHistory.push(...lastFrame.committedMoves);
+    steps += 1;
+  }
+
+  assert.equal(choreo.getState(), 'HOLDING');
+  assert.equal(committedHistory[committedHistory.length - 1], activeMoveAtStop);
+  assert.equal(choreo.getSnapshot().statusLabel, 'HOLDING — SCRAMBLED');
+  assert.equal(choreo.getSnapshot().scrambleButtonLabel, 'Scramble');
+  assert.equal(choreo.getSnapshot().scrambleButtonMode, 'start');
+  assert.equal(choreo.getSnapshot().scrambleButtonDisabled, false);
+  assert.equal(choreo.getSnapshot().primaryButtonDisabled, false);
+  assert.equal(choreo.getSnapshot().moveHistoryCount, committedHistory.length);
+
+  // Verify grippers returned cleanly to neutral left/right hold with zero yaw
+  assert.ok(Math.abs(lastFrame.cubeYaw) < 1e-6);
+  assert.equal(lastFrame.leftAngles.jawOpen, 0);
+  assert.equal(lastFrame.rightAngles.jawOpen, 0);
+  const leftFk = computeForwardKinematics('left', lastFrame.leftAngles);
+  const rightFk = computeForwardKinematics('right', lastFrame.rightAngles);
+  assert.ok(Math.abs(leftFk.contactPad.x + LAB_DIMENSIONS.CUBE_HALF) < 1e-3);
+  assert.ok(Math.abs(rightFk.contactPad.x - LAB_DIMENSIONS.CUBE_HALF) < 1e-3);
+
+  // 4. Resume scrambling without resetting moveHistory
+  const countBeforeResume = committedHistory.length;
+  assert.equal(choreo.toggleScramble(), true);
+  assert.equal(choreo.getState(), 'SCRAMBLING');
+  assert.equal(choreo.getSnapshot().scrambleProgress?.moveNumber, countBeforeResume + 1);
+
+  while (committedHistory.length < countBeforeResume + 3) {
+    const f = choreo.step(0.02);
+    committedHistory.push(...f.committedMoves);
+  }
+  assert.equal(choreo.toggleScramble(), true);
+  while (choreo.getState() !== 'HOLDING') {
+    const f = choreo.step(0.02);
+    committedHistory.push(...f.committedMoves);
+  }
+  assert.ok(choreo.getSnapshot().moveHistoryCount >= countBeforeResume + 3);
+
+  // 5. Put Down scrambled cube cleanly back onto the resting pad
+  assert.equal(choreo.triggerPrimaryAction(), true);
+  const restFrame = advanceBy(
+    choreo,
+    DEFAULT_DURATIONS.lower +
+      DEFAULT_DURATIONS.release +
+      DEFAULT_DURATIONS.returnHome +
+      0.05,
+  );
+  assert.equal(choreo.getState(), 'STANDBY');
+  assert.ok(Math.abs(restFrame.cubePosition.y - LAB_DIMENSIONS.CUBE_REST_Y) < 1e-4);
+});
+
+

@@ -86,10 +86,71 @@ export function getInverseMove(notation: CubeMoveNotation): CubeMoveNotation {
 }
 
 /**
- * Generates a balanced random scramble sequence of 14 to 16 moves.
- * - Never repeats the same face consecutively (no wasted R followed by R').
+ * Stateful on-the-fly scramble move generator supporting indefinite continuous scrambling.
+ * - Never repeats the exact same face twice in a row (no R followed by R or R').
  * - Prevents opposite-face ABA redundancies (e.g. R, L, R').
- * - Guarantees coverage across all 6 faces for a well-mixed scramble.
+ * - Continuously balances face frequency so turns remain evenly distributed across all 6 faces.
+ */
+export class ContinuousScrambleGenerator {
+  private readonly rng: () => number;
+  private readonly faceCounts: Record<CubeFace, number> = {
+    U: 0,
+    D: 0,
+    L: 0,
+    R: 0,
+    F: 0,
+    B: 0,
+  };
+  private prevFace: CubeFace | null = null;
+  private prevPrevFace: CubeFace | null = null;
+
+  constructor(rng: () => number = Math.random) {
+    this.rng = rng;
+  }
+
+  /** Generates the next balanced, non-redundant random face turn on the fly. */
+  next(): CubeMoveNotation {
+    const allowedFaces = ALL_FACES.filter((face) => {
+      if (face === this.prevFace) return false;
+      if (
+        this.prevFace !== null &&
+        this.prevPrevFace !== null &&
+        FACE_META[this.prevFace].opposite === this.prevPrevFace &&
+        face === this.prevPrevFace
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    const minCount = Math.min(...allowedFaces.map((f) => this.faceCounts[f]));
+    const balanced = allowedFaces.filter((f) => this.faceCounts[f] <= minCount + 1);
+    const pool = balanced.length > 0 ? balanced : allowedFaces;
+
+    const chosenFace = pool[Math.floor(this.rng() * pool.length)];
+    const prime = this.rng() < 0.5;
+    const notation = (prime ? `${chosenFace}'` : chosenFace) as CubeMoveNotation;
+
+    this.faceCounts[chosenFace] += 1;
+    this.prevPrevFace = this.prevFace;
+    this.prevFace = chosenFace;
+    return notation;
+  }
+
+  /** Seeds history context when resuming after a custom move without resetting counts. */
+  recordExternalFace(face: CubeFace): void {
+    this.faceCounts[face] += 1;
+    this.prevPrevFace = this.prevFace;
+    this.prevFace = face;
+  }
+
+  getFaceCounts(): Readonly<Record<CubeFace, number>> {
+    return {...this.faceCounts};
+  }
+}
+
+/**
+ * Generates a finite balanced random scramble sequence (useful for tests & scripted demos).
  */
 export function generateScrambleSequence(
   rng: () => number = Math.random,
@@ -98,58 +159,13 @@ export function generateScrambleSequence(
   const length =
     lengthOverride !== undefined
       ? Math.max(6, Math.floor(lengthOverride))
-      : 14 + Math.floor(rng() * 3); // 14, 15, or 16 moves
+      : 14 + Math.floor(rng() * 3);
 
+  const generator = new ContinuousScrambleGenerator(rng);
   const sequence: CubeMoveNotation[] = [];
-  const faceCounts: Record<CubeFace, number> = {
-    U: 0,
-    D: 0,
-    L: 0,
-    R: 0,
-    F: 0,
-    B: 0,
-  };
-
-  let prevFace: CubeFace | null = null;
-  let prevPrevFace: CubeFace | null = null;
-
   for (let i = 0; i < length; i++) {
-    const allowedFaces = ALL_FACES.filter((face) => {
-      if (face === prevFace) return false;
-      if (
-        prevFace !== null &&
-        prevPrevFace !== null &&
-        FACE_META[prevFace].opposite === prevPrevFace &&
-        face === prevPrevFace
-      ) {
-        return false;
-      }
-      return true;
-    });
-
-    // Prefer under-represented faces so every scramble uses all 6 faces naturally
-    const minCount = Math.min(...allowedFaces.map((f) => faceCounts[f]));
-    const remainingSlots = length - i;
-    const unvisitedAllowed = allowedFaces.filter((f) => faceCounts[f] === 0);
-
-    let pool: CubeFace[];
-    if (unvisitedAllowed.length > 0 && remainingSlots <= unvisitedAllowed.length + 2) {
-      pool = unvisitedAllowed;
-    } else {
-      const balanced = allowedFaces.filter((f) => faceCounts[f] <= minCount + 1);
-      pool = balanced.length > 0 ? balanced : allowedFaces;
-    }
-
-    const chosenFace = pool[Math.floor(rng() * pool.length)];
-    const prime = rng() < 0.5;
-    const notation = (prime ? `${chosenFace}'` : chosenFace) as CubeMoveNotation;
-
-    sequence.push(notation);
-    faceCounts[chosenFace] += 1;
-    prevPrevFace = prevFace;
-    prevFace = chosenFace;
+    sequence.push(generator.next());
   }
-
   return sequence;
 }
 

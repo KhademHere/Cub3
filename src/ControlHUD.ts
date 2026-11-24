@@ -10,6 +10,7 @@ export interface ControlHUDCallbacks {
 const ICON_PICKUP = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>`;
 const ICON_PUTDOWN = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14"/><path d="m19 12-7 7-7-7"/></svg>`;
 const ICON_SCRAMBLE = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`;
+const ICON_STOP = `<svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="5" y="5" width="14" height="14" rx="2.5"/></svg>`;
 const ICON_RESET_CAM = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/></svg>`;
 const ICON_SOUND_ON = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
 const ICON_SOUND_OFF = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>`;
@@ -28,6 +29,7 @@ export class ControlHUD {
   private readonly primaryIcon: HTMLSpanElement;
   private readonly primaryText: HTMLSpanElement;
   private readonly scrambleBtn: HTMLButtonElement;
+  private readonly scrambleIcon: HTMLSpanElement;
   private readonly scrambleText: HTMLSpanElement;
   private readonly muteBtn: HTMLButtonElement;
   private readonly resetCamBtn: HTMLButtonElement;
@@ -106,17 +108,17 @@ export class ControlHUD {
     this.scrambleBtn = document.createElement('button');
     this.scrambleBtn.type = 'button';
     this.scrambleBtn.className = 'btn-scramble';
-    this.scrambleBtn.setAttribute('data-active', 'false');
+    this.scrambleBtn.setAttribute('data-mode', 'start');
     this.scrambleBtn.setAttribute('data-testid', 'scramble-btn');
 
-    const scrambleIcon = document.createElement('span');
-    scrambleIcon.innerHTML = ICON_SCRAMBLE;
-    scrambleIcon.style.display = 'inline-flex';
+    this.scrambleIcon = document.createElement('span');
+    this.scrambleIcon.innerHTML = ICON_SCRAMBLE;
+    this.scrambleIcon.style.display = 'inline-flex';
 
     this.scrambleText = document.createElement('span');
     this.scrambleText.textContent = 'Scramble';
 
-    this.scrambleBtn.append(scrambleIcon, this.scrambleText);
+    this.scrambleBtn.append(this.scrambleIcon, this.scrambleText);
     this.scrambleBtn.addEventListener('click', () => {
       callbacks.onScramble();
     });
@@ -210,21 +212,21 @@ export class ControlHUD {
       snapshot.state === 'RELEASING' ||
       snapshot.state === 'RETURNING';
 
-    this.primaryBtn.disabled = snapshot.isBusy;
+    this.primaryBtn.disabled = snapshot.primaryButtonDisabled;
     this.primaryBtn.setAttribute('data-mode', showPutDown ? 'putdown' : 'pickup');
     this.primaryText.textContent = snapshot.primaryButtonLabel;
     this.primaryIcon.innerHTML = showPutDown ? ICON_PUTDOWN : ICON_PICKUP;
 
-    this.scrambleBtn.disabled = snapshot.isBusy;
-    this.scrambleBtn.setAttribute(
-      'data-active',
-      snapshot.state === 'SCRAMBLING' ? 'true' : 'false',
-    );
+    this.scrambleBtn.disabled = snapshot.scrambleButtonDisabled;
+    this.scrambleBtn.setAttribute('data-mode', snapshot.scrambleButtonMode);
     this.scrambleText.textContent = snapshot.scrambleButtonLabel;
+    this.scrambleIcon.innerHTML =
+      snapshot.scrambleButtonMode === 'stop' ? ICON_STOP : ICON_SCRAMBLE;
 
     // Expose machine state cleanly on body for accessibility & automated checks
     document.body.dataset.machineState = snapshot.state;
     document.body.dataset.scrambled = String(snapshot.isScrambled);
+    document.body.dataset.stopping = String(snapshot.isStoppingScramble);
     document.body.dataset.moveHistoryCount = String(snapshot.moveHistoryCount);
   }
 

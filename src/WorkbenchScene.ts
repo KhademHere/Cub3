@@ -132,11 +132,11 @@ export class WorkbenchScene extends xb.Script {
       }
       if (this.xrActionButton) {
         this.xrActionButton.label = snapshot.primaryButtonLabel;
-        this.xrActionButton.disabled = snapshot.isBusy;
+        this.xrActionButton.disabled = snapshot.primaryButtonDisabled;
       }
       if (this.xrScrambleButton) {
         this.xrScrambleButton.label = snapshot.scrambleButtonLabel;
-        this.xrScrambleButton.disabled = snapshot.isBusy;
+        this.xrScrambleButton.disabled = snapshot.scrambleButtonDisabled;
       }
     });
 
@@ -422,7 +422,7 @@ export class WorkbenchScene extends xb.Script {
       label: 'Scramble',
       style: {flexGrow: 1},
       onClick: () => {
-        this.triggerScramble();
+        this.toggleScramble();
       },
     });
     this.xrCard = new xb.UICard({
@@ -495,6 +495,10 @@ export class WorkbenchScene extends xb.Script {
 
   triggerPrimaryAction(): boolean {
     return this.controller?.togglePickUpPutDown() ?? false;
+  }
+
+  toggleScramble(): boolean {
+    return this.controller?.toggleScramble() ?? false;
   }
 
   triggerScramble(customSequence?: CubeMoveNotation[]): boolean {

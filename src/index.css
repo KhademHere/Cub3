@@ -315,16 +315,31 @@ canvas {
   transform: translateY(0);
 }
 
-.btn-scramble[data-active='true'] {
+.btn-scramble[data-mode='stop'] {
+  background: #dc2626;
+  border-color: #f87171;
+  color: #fff5f5;
+  box-shadow: 0 0 0 1px rgba(248, 113, 113, 0.25), 0 6px 18px rgba(220, 38, 38, 0.35);
+}
+
+.btn-scramble[data-mode='stop']:hover:not(:disabled) {
+  background: #ef4444;
+  border-color: #fca5a5;
+  color: #ffffff;
+  transform: translateY(-1px);
+}
+
+.btn-scramble[data-mode='busy'] {
   border-color: rgba(245, 158, 11, 0.72);
   color: #fde68a;
-  background: rgba(120, 53, 15, 0.42);
+  background: rgba(120, 53, 15, 0.45);
 }
 
 .btn-scramble:disabled {
   opacity: 0.52;
   cursor: not-allowed;
   transform: none;
+  box-shadow: none;
 }
 
 .btn-primary:focus-visible,

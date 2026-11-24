@@ -92,7 +92,7 @@ async function bootstrap(): Promise<void> {
   if (hudRoot) {
     hud = new ControlHUD(hudRoot, {
       onPrimaryAction: () => workbenchScene.triggerPrimaryAction(),
-      onScramble: () => workbenchScene.triggerScramble(),
+      onScramble: () => workbenchScene.toggleScramble(),
       onResetCamera: () => workbenchScene.resetCameraView(),
       onToggleMute: () => workbenchScene.toggleMute(),
     });
