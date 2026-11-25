@@ -35,6 +35,12 @@ const PUZZLE_OPTIONS: Array<{
     title: 'Shape-Shifting Metallic Mirror Cube (Bump Cube)',
     icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="7" y1="3" x2="7" y2="21"/><line x1="13" y1="3" x2="13" y2="21"/><line x1="3" y1="8" x2="21" y2="8"/><line x1="3" y1="14" x2="21" y2="14"/></svg>`,
   },
+  {
+    value: 'domino',
+    label: '3x3x2 Domino',
+    title: '3x3x2 Domino Cuboid (90° Top/Bottom, 180° Sides)',
+    icon: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><line x1="9" y1="6" x2="9" y2="18"/><line x1="15" y1="6" x2="15" y2="18"/><line x1="3" y1="12" x2="21" y2="12"/></svg>`,
+  },
 ];
 
 const ICON_PICKUP = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5"/><path d="m5 12 7-7 7 7"/></svg>`;

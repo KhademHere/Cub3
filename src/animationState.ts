@@ -159,21 +159,46 @@ function getCubeHoldY(bounds: PuzzleBoundsSnapshot): number {
     : LAB_DIMENSIONS.CUBE_HOLD_Y;
 }
 
+const DOMINO_LOWER_LAYER_Y_OFFSET = -0.036;
+const DOMINO_SHIFT_RETRACT = 0.044;
+
 /**
- * Builds the ordered physical manipulation micro-steps for any of the 12 standard moves.
- * Every transition enforces a strict 3-step Retract -> Exterior Arc / Unwind -> Straight Approach
- * clearance protocol so neither arm ever clips into the cube, the other arm, or the tabletop.
+ * Builds the ordered physical manipulation micro-steps for any move across Classic 3x3,
+ * Mirror Cube, and 3x3x2 Domino Cuboid (including 180-degree half-turns `L2/R2/F2/B2` and
+ * Domino stationary bottom-layer holding during `U/D`).
  */
-function buildMoveSteps(spec: CubeMoveSpec): MoveSubStep[] {
+function buildMoveSteps(
+  spec: CubeMoveSpec,
+  puzzleType: PuzzleType = 'classic',
+): MoveSubStep[] {
+  const isDomino = puzzleType === 'domino';
+  const twistDur = spec.isHalfTurn ? 0.44 : 0.3;
+
   if (spec.face === 'L' || spec.face === 'R') {
     return [
-      {kind: 'lr_twist', duration: 0.3, isTwist: true},
+      {kind: 'lr_twist', duration: twistDur, isTwist: true},
       {kind: 'lr_open_retract', duration: 0.14},
-      {kind: 'lr_unwind', duration: 0.2},
+      {kind: 'lr_unwind', duration: spec.isHalfTurn ? 0.28 : 0.2},
       {kind: 'lr_approach_close', duration: 0.15},
     ];
   }
   if (spec.face === 'U') {
+    if (isDomino) {
+      // Domino has no y=0 middle slice (cut plane sits at y=0). Once Right clamps +Y,
+      // Left shifts cleanly -36mm down onto the stationary bottom layer (y = -0.5) so
+      // it never touches the rotating top layer, then returns to y = 0 after Right reclamps +X.
+      return [
+        {kind: 'u_open_right', duration: 0.14},
+        {kind: 'u_to_top', duration: 0.32},
+        {kind: 'u_clamp_top', duration: 0.14},
+        {kind: 'u_left_shift_down', duration: 0.24},
+        {kind: 'u_twist', duration: 0.3, isTwist: true},
+        {kind: 'u_release_top', duration: 0.14},
+        {kind: 'u_to_side', duration: 0.32},
+        {kind: 'u_clamp_side', duration: 0.14},
+        {kind: 'u_left_shift_up', duration: 0.24},
+      ];
+    }
     return [
       {kind: 'u_open_right', duration: 0.14},
       {kind: 'u_to_top', duration: 0.32},
@@ -185,6 +210,21 @@ function buildMoveSteps(spec: CubeMoveSpec): MoveSubStep[] {
     ];
   }
   if (spec.face === 'D') {
+    if (isDomino) {
+      return [
+        {kind: 'd_flip_cube', duration: 0.34},
+        {kind: 'd_open_right', duration: 0.14},
+        {kind: 'd_to_top', duration: 0.32},
+        {kind: 'd_clamp_top', duration: 0.14},
+        {kind: 'd_left_shift_down', duration: 0.24},
+        {kind: 'd_twist', duration: 0.3, isTwist: true},
+        {kind: 'd_release_top', duration: 0.14},
+        {kind: 'd_to_side', duration: 0.32},
+        {kind: 'd_clamp_side', duration: 0.14},
+        {kind: 'd_left_shift_up', duration: 0.24},
+        {kind: 'd_unflip_cube', duration: 0.34},
+      ];
+    }
     return [
       {kind: 'd_flip_cube', duration: 0.34},
       {kind: 'd_open_right', duration: 0.14},
@@ -197,18 +237,7 @@ function buildMoveSteps(spec: CubeMoveSpec): MoveSubStep[] {
       {kind: 'd_unflip_cube', duration: 0.34},
     ];
   }
-  // F or B:
-  // 1. Right retracts out, arcs overhead, clamps +Y on ±Z.
-  // 2. Left opens & retracts wide clear of cube diagonal + rotating Right rail.
-  // 3. Right yaws whole cube ∓90deg to present F/B flush to Left (-X).
-  // 4. Left advances & clamps -X (on ±Z, strictly inside stationary middle-Y slice!).
-  // 5. Right opens, lifts straight UP clear of cube, unwinds wrist roll back to ±Z
-  //    (strictly centered on stationary middle slice X ∈ [-22mm, +22mm]), and re-clamps +Y!
-  // 6. Left twists F/B 90deg with pure horizontal clearance from Right gripper!
-  // 7. Left opens, retracts wide clear, and unwinds wrist roll back to 0 in open air.
-  // 8. Right restores cube yaw smoothly back to 0 (rotating its wrist 0 -> +presentYaw).
-  // 9. Left advances & re-clamps -X; Right releases +Y, lifts straight UP, arcs cleanly
-  //    back to right side while unwinding roll to 0, approaches flush & re-clamps +X!
+  // F / F' / F2 and B / B' / B2:
   return [
     {kind: 'fb_open_right', duration: 0.13},
     {kind: 'fb_right_to_top', duration: 0.3},
@@ -219,9 +248,9 @@ function buildMoveSteps(spec: CubeMoveSpec): MoveSubStep[] {
     {kind: 'fb_right_release_top_unwind', duration: 0.13},
     {kind: 'fb_right_unwind_top', duration: 0.18},
     {kind: 'fb_right_reclamp_top', duration: 0.13},
-    {kind: 'fb_twist', duration: 0.3, isTwist: true},
+    {kind: 'fb_twist', duration: twistDur, isTwist: true},
     {kind: 'fb_open_retract_left_post', duration: 0.15},
-    {kind: 'fb_unwind_left_clear', duration: 0.16},
+    {kind: 'fb_unwind_left_clear', duration: spec.isHalfTurn ? 0.26 : 0.16},
     {kind: 'fb_restore_cube', duration: 0.26},
     {kind: 'fb_advance_reclamp_left', duration: 0.15},
     {kind: 'fb_release_top', duration: 0.13},
@@ -237,6 +266,7 @@ function makeDynamicWaypoints(
 ) {
   const z = LAB_DIMENSIONS.TABLE_CENTER_Z;
   const isMirror = curBounds.puzzleType === 'mirror';
+  const isDomino = curBounds.puzzleType === 'domino';
   const restY = getCubeRestY(curBounds);
   const holdY = getCubeHoldY(curBounds);
 
@@ -280,9 +310,13 @@ function makeDynamicWaypoints(
   const rightSideClearPre: Vec3 = {x: preR.faceNormal + sideRetract, y: holdY, z};
   const rightSideClearCur: Vec3 = {x: curR.faceNormal + sideRetract, y: holdY, z};
 
-  // Overhead (U/D/F/B) cube shift position: keeps Right arm strictly inside 0.675m IK envelope
-  // even when a 1.60-thick Mirror Cube block protrudes +0.144m upward!
-  const cubeTopPos: Vec3 = isMirror ? {x: 0.13, y: 1.12, z} : {x: 0.09, y: 1.13, z};
+  // Overhead (U/D/F/B) cube shift position: keeps Right arm strictly inside IK envelope
+  // and keeps Domino 180-degree jaw sweeps well above the tabletop!
+  const cubeTopPos: Vec3 = isMirror
+    ? {x: 0.13, y: 1.12, z}
+    : isDomino
+      ? {x: 0.09, y: 1.14, z}
+      : {x: 0.09, y: 1.13, z};
 
   const maxUFace = Math.max(preBounds.faces.U.faceNormal, curBounds.faces.U.faceNormal);
   const maxDFace = Math.max(preBounds.faces.D.faceNormal, curBounds.faces.D.faceNormal);
@@ -568,6 +602,19 @@ export class RoboticsChoreography {
     let solveButtonDisabled =
       this.isBusy() || !this.scrambledFlag || this.totalCommittedMoves === 0;
 
+    const puzzleBadge =
+      this.puzzleType === 'mirror'
+        ? 'MIRROR'
+        : this.puzzleType === 'domino'
+          ? '3x3x2'
+          : null;
+    const puzzleStandbyName =
+      this.puzzleType === 'mirror'
+        ? 'MIRROR CUBE'
+        : this.puzzleType === 'domino'
+          ? '3x3x2 DOMINO'
+          : null;
+
     if (isScrambling && this.currentMoveSpec) {
       const moveNumber = this.currentTurnId;
       scrambleProgress = {
@@ -601,39 +648,39 @@ export class RoboticsChoreography {
       solveButtonLabel = 'Solving...';
       solveButtonDisabled = true;
     } else if (isCelebrating) {
-      statusLabel =
-        this.puzzleType === 'mirror' ? 'SOLVED ✓ • MIRROR' : 'SOLVED ✓';
+      statusLabel = puzzleBadge ? `SOLVED ✓ • ${puzzleBadge}` : 'SOLVED ✓';
       solveButtonLabel = 'Solved';
       solveButtonDisabled = true;
     } else if (this.state === 'SWAPPING') {
+      const target = this.swapTargetPuzzle ?? this.puzzleType;
       const targetName =
-        (this.swapTargetPuzzle ?? this.puzzleType) === 'mirror'
+        target === 'mirror'
           ? 'MIRROR CUBE'
-          : 'CLASSIC 3x3';
+          : target === 'domino'
+            ? '3x3x2 DOMINO'
+            : 'CLASSIC 3x3';
       statusLabel = `SWAPPING • ${targetName}`;
     } else if (isAutoLiftingToSolve) {
       solveButtonLabel = 'Lifting...';
       solveButtonDisabled = true;
     } else if (this.state === 'HOLDING' && this.scrambledFlag) {
-      statusLabel =
-        this.puzzleType === 'mirror'
-          ? 'HOLDING — SCRAMBLED • MIRROR'
-          : 'HOLDING — SCRAMBLED';
+      statusLabel = puzzleBadge
+        ? `HOLDING — SCRAMBLED • ${puzzleBadge}`
+        : 'HOLDING — SCRAMBLED';
       scrambleButtonLabel = 'Scramble';
       scrambleButtonMode = 'start';
       scrambleButtonDisabled = false;
     } else if (this.state === 'HOLDING' && this.justSolvedFlag) {
-      statusLabel =
-        this.puzzleType === 'mirror'
-          ? 'HOLDING — SOLVED ✓ • MIRROR'
-          : 'HOLDING — SOLVED ✓';
+      statusLabel = puzzleBadge
+        ? `HOLDING — SOLVED ✓ • ${puzzleBadge}`
+        : 'HOLDING — SOLVED ✓';
       solveButtonLabel = 'Solved';
       solveButtonDisabled = true;
-    } else if (this.state === 'HOLDING' && this.puzzleType === 'mirror') {
-      statusLabel = 'HOLDING — READY • MIRROR';
+    } else if (this.state === 'HOLDING' && puzzleBadge) {
+      statusLabel = `HOLDING — READY • ${puzzleBadge}`;
     } else if (this.state === 'STANDBY') {
-      if (this.puzzleType === 'mirror') {
-        statusLabel = 'STANDBY • MIRROR CUBE';
+      if (puzzleStandbyName) {
+        statusLabel = `STANDBY • ${puzzleStandbyName}`;
       }
       if (this.justSolvedFlag && !this.scrambledFlag) {
         solveButtonLabel = 'Solved';
@@ -785,7 +832,7 @@ export class RoboticsChoreography {
       return false;
     }
 
-    const solution = computeOptimizedSolution(moveHistory);
+    const solution = computeOptimizedSolution(moveHistory, this.puzzleType);
     if (solution.length === 0) {
       this.scrambledFlag = false;
       this.justSolvedFlag = true;
@@ -889,7 +936,7 @@ export class RoboticsChoreography {
     const curBounds = this.activeBounds;
     const preBounds = this.twistStartBounds;
     const wp = makeDynamicWaypoints(preBounds, curBounds);
-    const isMirror = curBounds.puzzleType === 'mirror';
+    const useDynamicJaws = curBounds.puzzleType !== 'classic';
 
     let leftJawOpen = 1;
     let rightJawOpen = 1;
@@ -904,10 +951,10 @@ export class RoboticsChoreography {
     let activeFaceTurn: ActiveFaceTurnFrame | null = null;
 
     // Live jaw extents (undefined for Classic 3x3 -> uses exact symmetric CUBE_OUTER_HALF)
-    let leftFrontJaw: number | undefined = isMirror ? curBounds.faces.L.jawPos : undefined;
-    let leftRearJaw: number | undefined = isMirror ? curBounds.faces.L.jawNeg : undefined;
-    let rightFrontJaw: number | undefined = isMirror ? curBounds.faces.R.jawPos : undefined;
-    let rightRearJaw: number | undefined = isMirror ? curBounds.faces.R.jawNeg : undefined;
+    let leftFrontJaw: number | undefined = useDynamicJaws ? curBounds.faces.L.jawPos : undefined;
+    let leftRearJaw: number | undefined = useDynamicJaws ? curBounds.faces.L.jawNeg : undefined;
+    let rightFrontJaw: number | undefined = useDynamicJaws ? curBounds.faces.R.jawPos : undefined;
+    let rightRearJaw: number | undefined = useDynamicJaws ? curBounds.faces.R.jawNeg : undefined;
 
     this._cubePos.x = 0;
     this._cubePos.y = wp.restY;
@@ -1238,6 +1285,8 @@ export class RoboticsChoreography {
     activeFaceTurn: ActiveFaceTurnFrame | null;
   } {
     const isMirror = curBounds.puzzleType === 'mirror';
+    const isDomino = curBounds.puzzleType === 'domino';
+    const useDynamicJaws = isMirror || isDomino;
     const z = LAB_DIMENSIONS.TABLE_CENTER_Z;
     const holdY = wp.holdY;
 
@@ -1257,10 +1306,10 @@ export class RoboticsChoreography {
     let rightRoll = 0;
     let leftJawOpen = 0;
     let rightJawOpen = 0;
-    let leftFrontJaw: number | undefined = isMirror ? preL.jawPos : undefined;
-    let leftRearJaw: number | undefined = isMirror ? preL.jawNeg : undefined;
-    let rightFrontJaw: number | undefined = isMirror ? preR.jawPos : undefined;
-    let rightRearJaw: number | undefined = isMirror ? preR.jawNeg : undefined;
+    let leftFrontJaw: number | undefined = useDynamicJaws ? preL.jawPos : undefined;
+    let leftRearJaw: number | undefined = useDynamicJaws ? preL.jawNeg : undefined;
+    let rightFrontJaw: number | undefined = useDynamicJaws ? preR.jawPos : undefined;
+    let rightRearJaw: number | undefined = useDynamicJaws ? preR.jawNeg : undefined;
     let activeFaceTurn: ActiveFaceTurnFrame | null = null;
 
     const spec = this.currentMoveSpec;
@@ -1289,8 +1338,34 @@ export class RoboticsChoreography {
     const rawT = clamp01(this.stepElapsed / step.duration);
     const tQuint = easeInOutQuint(rawT);
 
+    // Helper for clean 3-stage open-retract -> vertical shift -> advance-clamp on Left arm
+    // (used exclusively for 3x3x2 Domino U/D so Left grips strictly inside the stationary bottom layer).
+    const evalLeftVerticalRegrip = (
+      flushX: number,
+      startY: number,
+      endY: number,
+    ): void => {
+      const clearX = flushX - DOMINO_SHIFT_RETRACT;
+      if (rawT < 0.34) {
+        const u = rawT / 0.34;
+        leftJawOpen = easeInOutCubic(clamp01(u / 0.55));
+        leftPos.x = lerp(flushX, clearX, easeInOutQuint(clamp01((u - 0.3) / 0.7)));
+        leftPos.y = startY;
+      } else if (rawT < 0.66) {
+        const u = (rawT - 0.34) / 0.32;
+        leftJawOpen = 1;
+        leftPos.x = clearX;
+        leftPos.y = lerp(startY, endY, easeInOutQuint(u));
+      } else {
+        const u = (rawT - 0.66) / 0.34;
+        leftPos.x = lerp(clearX, flushX, easeInOutQuint(clamp01(u / 0.62)));
+        leftPos.y = endY;
+        leftJawOpen = lerp(1, 0, easeInOutCubic(clamp01((u - 0.52) / 0.48)));
+      }
+    };
+
     // -------------------------------------------------------------------------
-    // 1. L / L' and R / R': Twist -> Open & Retract Clear -> Unwind -> Approach & Clamp
+    // 1. L / L' / L2 and R / R' / R2: Twist -> Open & Retract Clear -> Unwind -> Approach & Clamp
     // -------------------------------------------------------------------------
     if (spec.face === 'L' || spec.face === 'R') {
       const isLeft = spec.face === 'L';
@@ -1325,7 +1400,7 @@ export class RoboticsChoreography {
             leftPos.x = wp.leftUnwindClear.x;
             leftRoll = lerp(twistTarget, 0, tQuint);
             leftJawOpen = 1;
-            if (isMirror) {
+            if (useDynamicJaws) {
               leftFrontJaw = lerp(preL.jawPos, curL.jawPos, tQuint);
               leftRearJaw = lerp(preL.jawNeg, curL.jawNeg, tQuint);
             }
@@ -1333,7 +1408,7 @@ export class RoboticsChoreography {
             rightPos.x = wp.rightUnwindClear.x;
             rightRoll = lerp(twistTarget, 0, tQuint);
             rightJawOpen = 1;
-            if (isMirror) {
+            if (useDynamicJaws) {
               rightFrontJaw = lerp(preR.jawPos, curR.jawPos, tQuint);
               rightRearJaw = lerp(preR.jawNeg, curR.jawNeg, tQuint);
             }
@@ -1345,14 +1420,14 @@ export class RoboticsChoreography {
           if (isLeft) {
             leftPos.x = lerp(wp.leftUnwindClear.x, wp.leftClampHoldCur.x, tIn);
             leftJawOpen = lerp(1, 0, tClose);
-            if (isMirror) {
+            if (useDynamicJaws) {
               leftFrontJaw = curL.jawPos;
               leftRearJaw = curL.jawNeg;
             }
           } else {
             rightPos.x = lerp(wp.rightUnwindClear.x, wp.rightClampHoldCur.x, tIn);
             rightJawOpen = lerp(1, 0, tClose);
-            if (isMirror) {
+            if (useDynamicJaws) {
               rightFrontJaw = curR.jawPos;
               rightRearJaw = curR.jawNeg;
             }
@@ -1381,11 +1456,12 @@ export class RoboticsChoreography {
     }
 
     // -------------------------------------------------------------------------
-    // 2. U / U': Left holds -X center slice, Right Retracts -> Exterior Arc -> Approaches +Y
+    // 2. U / U': Left holds stationary slice (y=0 for 3x3, y=-0.5 for Domino), Right twists +Y
     // -------------------------------------------------------------------------
     if (spec.face === 'U') {
       const twistTarget = -spec.angleRad;
       const preU = preBounds.faces.U;
+      const dominoLowerY = isDomino ? DOMINO_LOWER_LAYER_Y_OFFSET : 0;
 
       switch (step.kind) {
         case 'u_open_right':
@@ -1411,7 +1487,7 @@ export class RoboticsChoreography {
           );
           rightPitch = lerp(0, -Math.PI / 2, easeInOutCubic(clamp01((rawT - 0.14) / 0.86)));
           rightJawOpen = 1;
-          if (isMirror) {
+          if (useDynamicJaws) {
             rightFrontJaw = lerp(preR.jawPos, preU.jawPos, tQuint);
             rightRearJaw = lerp(preR.jawNeg, preU.jawNeg, tQuint);
           }
@@ -1429,7 +1505,24 @@ export class RoboticsChoreography {
           );
           rightPitch = -Math.PI / 2;
           rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
-          if (isMirror) {
+          if (useDynamicJaws) {
+            rightFrontJaw = preU.jawPos;
+            rightRearJaw = preU.jawNeg;
+          }
+          break;
+        case 'u_left_shift_down':
+          cubePos.x = wp.cubeTopPos.x;
+          cubePos.y = wp.cubeTopPos.y;
+          rightPos.x = wp.rightTopContactU.x;
+          rightPos.y = wp.rightTopContactU.y;
+          rightPitch = -Math.PI / 2;
+          rightJawOpen = 0;
+          evalLeftVerticalRegrip(
+            cubePos.x - preL.stripNormal,
+            cubePos.y,
+            cubePos.y + DOMINO_LOWER_LAYER_Y_OFFSET,
+          );
+          if (useDynamicJaws) {
             rightFrontJaw = preU.jawPos;
             rightRearJaw = preU.jawNeg;
           }
@@ -1438,12 +1531,12 @@ export class RoboticsChoreography {
           cubePos.x = wp.cubeTopPos.x;
           cubePos.y = wp.cubeTopPos.y;
           leftPos.x = cubePos.x - preL.stripNormal;
-          leftPos.y = cubePos.y;
+          leftPos.y = cubePos.y + dominoLowerY;
           rightPos.x = wp.rightTopContactU.x;
           rightPos.y = wp.rightTopContactU.y;
           rightPitch = -Math.PI / 2;
           rightRoll = twistTarget * tQuint;
-          if (isMirror) {
+          if (useDynamicJaws) {
             rightFrontJaw = preU.jawPos;
             rightRearJaw = preU.jawNeg;
           }
@@ -1457,7 +1550,7 @@ export class RoboticsChoreography {
           cubePos.x = wp.cubeTopPos.x;
           cubePos.y = wp.cubeTopPos.y;
           leftPos.x = cubePos.x - preL.stripNormal;
-          leftPos.y = cubePos.y;
+          leftPos.y = cubePos.y + dominoLowerY;
           rightPos.x = wp.rightTopContactU.x;
           rightPos.y = lerp(
             wp.rightTopContactU.y,
@@ -1467,7 +1560,7 @@ export class RoboticsChoreography {
           rightPitch = -Math.PI / 2;
           rightRoll = twistTarget;
           rightJawOpen = easeInOutCubic(clamp01(rawT / 0.48));
-          if (isMirror) {
+          if (useDynamicJaws) {
             rightFrontJaw = preU.jawPos;
             rightRearJaw = preU.jawNeg;
           }
@@ -1476,7 +1569,7 @@ export class RoboticsChoreography {
           cubePos.x = lerp(wp.cubeTopPos.x, 0, tQuint);
           cubePos.y = lerp(wp.cubeTopPos.y, holdY, tQuint);
           leftPos.x = cubePos.x - curL.stripNormal;
-          leftPos.y = cubePos.y;
+          leftPos.y = cubePos.y + dominoLowerY;
           evalCubicBezier3(
             wp.rightTopClearU,
             wp.rightTopArc2,
@@ -1488,20 +1581,35 @@ export class RoboticsChoreography {
           rightPitch = lerp(-Math.PI / 2, 0, easeInOutCubic(clamp01(rawT / 0.86)));
           rightRoll = lerp(twistTarget, 0, tQuint);
           rightJawOpen = 1;
-          if (isMirror) {
+          if (useDynamicJaws) {
             rightFrontJaw = lerp(preU.jawPos, curR.jawPos, tQuint);
             rightRearJaw = lerp(preU.jawNeg, curR.jawNeg, tQuint);
           }
           break;
         case 'u_clamp_side':
           leftPos.x = -curL.stripNormal;
+          leftPos.y = holdY + dominoLowerY;
           rightPos.x = lerp(
             wp.rightSideClearCur.x,
             wp.rightClampHoldCur.x,
             easeInOutQuint(clamp01(rawT / 0.56)),
           );
           rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
-          if (isMirror) {
+          if (useDynamicJaws) {
+            rightFrontJaw = curR.jawPos;
+            rightRearJaw = curR.jawNeg;
+          }
+          break;
+        case 'u_left_shift_up':
+          rightPos.x = wp.rightClampHoldCur.x;
+          rightPos.y = holdY;
+          rightJawOpen = 0;
+          evalLeftVerticalRegrip(
+            -curL.stripNormal,
+            holdY + DOMINO_LOWER_LAYER_Y_OFFSET,
+            holdY,
+          );
+          if (useDynamicJaws) {
             rightFrontJaw = curR.jawPos;
             rightRearJaw = curR.jawNeg;
           }
@@ -1536,6 +1644,7 @@ export class RoboticsChoreography {
       // When cubePitch = PI, cube-local +Z maps to world -Z and -Z maps to world +Z
       const dFrontJaw = preD.jawNeg;
       const dRearJaw = preD.jawPos;
+      const dominoLowerY = isDomino ? DOMINO_LOWER_LAYER_Y_OFFSET : 0;
 
       switch (step.kind) {
         case 'd_flip_cube':
@@ -1572,7 +1681,7 @@ export class RoboticsChoreography {
           rightPitch = lerp(0, -Math.PI / 2, easeInOutCubic(clamp01((rawT - 0.14) / 0.86)));
           rightRoll = lerp(-Math.PI, 0, easeInOutCubic(clamp01((rawT - 0.1) / 0.8)));
           rightJawOpen = 1;
-          if (isMirror) {
+          if (useDynamicJaws) {
             rightFrontJaw = lerp(preR.jawPos, dFrontJaw, tQuint);
             rightRearJaw = lerp(preR.jawNeg, dRearJaw, tQuint);
           }
@@ -1593,7 +1702,27 @@ export class RoboticsChoreography {
           rightPitch = -Math.PI / 2;
           rightRoll = 0;
           rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
-          if (isMirror) {
+          if (useDynamicJaws) {
+            rightFrontJaw = dFrontJaw;
+            rightRearJaw = dRearJaw;
+          }
+          break;
+        case 'd_left_shift_down':
+          cubePitch = Math.PI;
+          leftRoll = Math.PI;
+          cubePos.x = wp.cubeTopPos.x;
+          cubePos.y = wp.cubeTopPos.y;
+          rightPos.x = wp.rightTopContactD.x;
+          rightPos.y = wp.rightTopContactD.y;
+          rightPitch = -Math.PI / 2;
+          rightRoll = 0;
+          rightJawOpen = 0;
+          evalLeftVerticalRegrip(
+            cubePos.x - preL.stripNormal,
+            cubePos.y,
+            cubePos.y + DOMINO_LOWER_LAYER_Y_OFFSET,
+          );
+          if (useDynamicJaws) {
             rightFrontJaw = dFrontJaw;
             rightRearJaw = dRearJaw;
           }
@@ -1604,12 +1733,12 @@ export class RoboticsChoreography {
           cubePos.x = wp.cubeTopPos.x;
           cubePos.y = wp.cubeTopPos.y;
           leftPos.x = cubePos.x - preL.stripNormal;
-          leftPos.y = cubePos.y;
+          leftPos.y = cubePos.y + dominoLowerY;
           rightPos.x = wp.rightTopContactD.x;
           rightPos.y = wp.rightTopContactD.y;
           rightPitch = -Math.PI / 2;
           rightRoll = twistTarget * tQuint;
-          if (isMirror) {
+          if (useDynamicJaws) {
             rightFrontJaw = dFrontJaw;
             rightRearJaw = dRearJaw;
           }
@@ -1625,7 +1754,7 @@ export class RoboticsChoreography {
           cubePos.x = wp.cubeTopPos.x;
           cubePos.y = wp.cubeTopPos.y;
           leftPos.x = cubePos.x - preL.stripNormal;
-          leftPos.y = cubePos.y;
+          leftPos.y = cubePos.y + dominoLowerY;
           rightPos.x = wp.rightTopContactD.x;
           rightPos.y = lerp(
             wp.rightTopContactD.y,
@@ -1635,7 +1764,7 @@ export class RoboticsChoreography {
           rightPitch = -Math.PI / 2;
           rightRoll = twistTarget;
           rightJawOpen = easeInOutCubic(clamp01(rawT / 0.48));
-          if (isMirror) {
+          if (useDynamicJaws) {
             rightFrontJaw = dFrontJaw;
             rightRearJaw = dRearJaw;
           }
@@ -1646,7 +1775,7 @@ export class RoboticsChoreography {
           cubePos.x = lerp(wp.cubeTopPos.x, 0, tQuint);
           cubePos.y = lerp(wp.cubeTopPos.y, holdY, tQuint);
           leftPos.x = cubePos.x - curL.stripNormal;
-          leftPos.y = cubePos.y;
+          leftPos.y = cubePos.y + dominoLowerY;
           evalCubicBezier3(
             wp.rightTopClearD,
             wp.rightTopArc2,
@@ -1658,7 +1787,7 @@ export class RoboticsChoreography {
           rightPitch = lerp(-Math.PI / 2, 0, easeInOutCubic(clamp01(rawT / 0.86)));
           rightRoll = lerp(twistTarget, -Math.PI, easeInOutCubic(clamp01((rawT - 0.1) / 0.8)));
           rightJawOpen = 1;
-          if (isMirror) {
+          if (useDynamicJaws) {
             rightFrontJaw = lerp(dFrontJaw, curR.jawPos, tQuint);
             rightRearJaw = lerp(dRearJaw, curR.jawNeg, tQuint);
           }
@@ -1668,13 +1797,31 @@ export class RoboticsChoreography {
           leftRoll = Math.PI;
           rightRoll = -Math.PI;
           leftPos.x = -curL.stripNormal;
+          leftPos.y = holdY + dominoLowerY;
           rightPos.x = lerp(
             wp.rightSideClearCur.x,
             wp.rightClampHoldCur.x,
             easeInOutQuint(clamp01(rawT / 0.56)),
           );
           rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
-          if (isMirror) {
+          if (useDynamicJaws) {
+            rightFrontJaw = curR.jawPos;
+            rightRearJaw = curR.jawNeg;
+          }
+          break;
+        case 'd_left_shift_up':
+          cubePitch = Math.PI;
+          leftRoll = Math.PI;
+          rightRoll = -Math.PI;
+          rightPos.x = wp.rightClampHoldCur.x;
+          rightPos.y = holdY;
+          rightJawOpen = 0;
+          evalLeftVerticalRegrip(
+            -curL.stripNormal,
+            holdY + DOMINO_LOWER_LAYER_Y_OFFSET,
+            holdY,
+          );
+          if (useDynamicJaws) {
             rightFrontJaw = curR.jawPos;
             rightRearJaw = curR.jawNeg;
           }
@@ -1685,7 +1832,7 @@ export class RoboticsChoreography {
           rightRoll = -cubePitch;
           leftPos.x = -curL.stripNormal;
           rightPos.x = curR.stripNormal;
-          if (isMirror) {
+          if (useDynamicJaws) {
             leftFrontJaw = curL.jawPos;
             leftRearJaw = curL.jawNeg;
             rightFrontJaw = curR.jawPos;
@@ -1759,7 +1906,7 @@ export class RoboticsChoreography {
         );
         rightPitch = lerp(0, -Math.PI / 2, easeInOutCubic(clamp01((rawT - 0.14) / 0.86)));
         rightJawOpen = 1;
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = lerp(preR.jawPos, preU.jawPos, tQuint);
           rightRearJaw = lerp(preR.jawNeg, preU.jawNeg, tQuint);
         }
@@ -1777,7 +1924,7 @@ export class RoboticsChoreography {
         );
         rightPitch = -Math.PI / 2;
         rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = preU.jawPos;
           rightRearJaw = preU.jawNeg;
         }
@@ -1795,7 +1942,7 @@ export class RoboticsChoreography {
           easeInOutQuint(clamp01((rawT - 0.22) / 0.78)),
         );
         leftPos.y = cubePos.y;
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = preU.jawPos;
           rightRearJaw = preU.jawNeg;
         }
@@ -1811,7 +1958,7 @@ export class RoboticsChoreography {
         leftPos.x = leftClearX;
         leftPos.y = cubePos.y;
         leftJawOpen = 1;
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = preU.jawPos;
           rightRearJaw = preU.jawNeg;
           leftFrontJaw = lerp(preL.jawPos, fbLeftFrontJaw, tQuint);
@@ -1833,7 +1980,7 @@ export class RoboticsChoreography {
         );
         leftPos.y = cubePos.y;
         leftJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = preU.jawPos;
           rightRearJaw = preU.jawNeg;
           leftFrontJaw = fbLeftFrontJaw;
@@ -1855,7 +2002,7 @@ export class RoboticsChoreography {
         rightPitch = -Math.PI / 2;
         rightRoll = -presentYaw;
         rightJawOpen = easeInOutCubic(clamp01(rawT / 0.48));
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = preU.jawPos;
           rightRearJaw = preU.jawNeg;
           leftFrontJaw = fbLeftFrontJaw;
@@ -1873,7 +2020,7 @@ export class RoboticsChoreography {
         rightPitch = -Math.PI / 2;
         rightRoll = lerp(-presentYaw, 0, tQuint);
         rightJawOpen = 1;
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = lerp(preU.jawPos, uFbRightFrontJaw, tQuint);
           rightRearJaw = lerp(preU.jawNeg, uFbRightRearJaw, tQuint);
           leftFrontJaw = fbLeftFrontJaw;
@@ -1895,7 +2042,7 @@ export class RoboticsChoreography {
         rightPitch = -Math.PI / 2;
         rightRoll = 0;
         rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = uFbRightFrontJaw;
           rightRearJaw = uFbRightRearJaw;
           leftFrontJaw = fbLeftFrontJaw;
@@ -1913,7 +2060,7 @@ export class RoboticsChoreography {
         leftPos.x = leftAtTargetX;
         leftPos.y = cubePos.y;
         leftRoll = leftTwistTarget * tQuint;
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = uFbRightFrontJaw;
           rightRearJaw = uFbRightRearJaw;
           leftFrontJaw = fbLeftFrontJaw;
@@ -1941,7 +2088,7 @@ export class RoboticsChoreography {
         );
         leftPos.y = cubePos.y;
         leftRoll = leftTwistTarget;
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = uFbRightFrontJaw;
           rightRearJaw = uFbRightRearJaw;
           leftFrontJaw = fbLeftFrontJaw;
@@ -1960,7 +2107,7 @@ export class RoboticsChoreography {
         leftPos.y = cubePos.y;
         leftJawOpen = 1;
         leftRoll = lerp(leftTwistTarget, 0, tQuint);
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = uFbRightFrontJaw;
           rightRearJaw = uFbRightRearJaw;
           leftFrontJaw = lerp(fbLeftFrontJaw, curL.jawPos, tQuint);
@@ -1978,7 +2125,7 @@ export class RoboticsChoreography {
         leftPos.x = leftClearX;
         leftPos.y = cubePos.y;
         leftJawOpen = 1;
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = uFbRightFrontJaw;
           rightRearJaw = uFbRightRearJaw;
           leftFrontJaw = curL.jawPos;
@@ -1999,7 +2146,7 @@ export class RoboticsChoreography {
         );
         leftPos.y = cubePos.y;
         leftJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = uFbRightFrontJaw;
           rightRearJaw = uFbRightRearJaw;
           leftFrontJaw = curL.jawPos;
@@ -2020,7 +2167,7 @@ export class RoboticsChoreography {
         rightPitch = -Math.PI / 2;
         rightRoll = presentYaw;
         rightJawOpen = easeInOutCubic(clamp01(rawT / 0.48));
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = uFbRightFrontJaw;
           rightRearJaw = uFbRightRearJaw;
           leftFrontJaw = curL.jawPos;
@@ -2043,7 +2190,7 @@ export class RoboticsChoreography {
         rightPitch = lerp(-Math.PI / 2, 0, easeInOutCubic(clamp01(rawT / 0.86)));
         rightRoll = lerp(presentYaw, 0, tQuint);
         rightJawOpen = 1;
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = lerp(uFbRightFrontJaw, curR.jawPos, tQuint);
           rightRearJaw = lerp(uFbRightRearJaw, curR.jawNeg, tQuint);
           leftFrontJaw = curL.jawPos;
@@ -2058,7 +2205,7 @@ export class RoboticsChoreography {
           easeInOutQuint(clamp01(rawT / 0.56)),
         );
         rightJawOpen = lerp(1, 0, easeInOutCubic(clamp01((rawT - 0.48) / 0.52)));
-        if (isMirror) {
+        if (useDynamicJaws) {
           rightFrontJaw = curR.jawPos;
           rightRearJaw = curR.jawNeg;
           leftFrontJaw = curL.jawPos;
@@ -2097,7 +2244,7 @@ export class RoboticsChoreography {
     this.pendingMoveQueue = null;
     this.currentMoveIndex = 0;
     this.solveTotalMoves = 0;
-    this.loadMoveNotation(this.scrambleGenerator.next());
+    this.loadMoveNotation(this.scrambleGenerator.next(this.puzzleType));
     this.transitionTo('SCRAMBLING');
   }
 
@@ -2138,7 +2285,7 @@ export class RoboticsChoreography {
 
   private loadMoveNotation(notation: CubeMoveNotation): void {
     this.currentMoveSpec = getMoveSpec(notation);
-    this.currentSteps = buildMoveSteps(this.currentMoveSpec);
+    this.currentSteps = buildMoveSteps(this.currentMoveSpec, this.puzzleType);
     this.currentStepIndex = 0;
     this.stepElapsed = 0;
     this.turnIdCounter += 1;
@@ -2192,7 +2339,7 @@ export class RoboticsChoreography {
         }
 
         if (!isSolving && this.continuousScrambleActive) {
-          const nextMove = this.scrambleGenerator.next();
+          const nextMove = this.scrambleGenerator.next(this.puzzleType);
           this.loadMoveNotation(nextMove);
           this.stepElapsed = overflow;
           this.notify();

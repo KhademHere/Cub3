@@ -1,6 +1,6 @@
 import type {CubeMoveNotation} from './cubeMoves';
 
-export type PuzzleType = 'classic' | 'mirror';
+export type PuzzleType = 'classic' | 'mirror' | 'domino';
 
 export type MachineState =
   | 'STANDBY'
@@ -29,7 +29,8 @@ export type ArmSide = 'left' | 'right';
 export type MotionSpeed = 0.5 | 1 | 2;
 
 export type FaceAxis = 'x' | 'y' | 'z';
-export type FaceLayer = -1 | 0 | 1;
+export type StandardLayer = -1 | 0 | 1;
+export type FaceLayer = -1 | -0.5 | 0 | 0.5 | 1;
 
 export interface CubieCoord {
   x: FaceLayer;

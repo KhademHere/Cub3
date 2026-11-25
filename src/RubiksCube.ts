@@ -16,6 +16,7 @@ import type {
   FaceStripMetrics,
   PuzzleBoundsSnapshot,
   PuzzleType,
+  StandardLayer,
 } from './types';
 
 export interface CubieUnit {
@@ -38,7 +39,7 @@ export interface CubieUnit {
  * - Total solved footprint along each axis is `3.00` units (`0.210m`), matching Classic 3x3.
  */
 export const MIRROR_CORE_SLICE_UNIT = 0.86;
-export const MIRROR_LAYER_UNITS: Record<FaceAxis, Record<FaceLayer, number>> = {
+export const MIRROR_LAYER_UNITS: Record<FaceAxis, Record<StandardLayer, number>> = {
   x: {'-1': 0.54, '0': MIRROR_CORE_SLICE_UNIT, '1': 1.6},
   y: {'-1': 0.68, '0': MIRROR_CORE_SLICE_UNIT, '1': 1.46},
   z: {'-1': 0.78, '0': MIRROR_CORE_SLICE_UNIT, '1': 1.36},
@@ -52,7 +53,7 @@ const MIRROR_FLUSH_EPS = 0.0005;
 /** Computes the exact center offset (in cubie units) of a Mirror Cube layer relative to core `0`. */
 export function getMirrorLayerCenterUnit(
   axis: FaceAxis,
-  layer: FaceLayer,
+  layer: StandardLayer,
 ): number {
   const halfM = MIRROR_CORE_SLICE_UNIT / 2;
   if (layer === 0) return 0;
@@ -225,8 +226,10 @@ export class RubiksCube extends THREE.Group {
 
     if (type === 'classic') {
       this.buildClassicCubies();
-    } else {
+    } else if (type === 'mirror') {
       this.buildMirrorCubies();
+    } else {
+      this.buildDominoCubies();
     }
     this.updateMatrixWorld(true);
   }
@@ -365,7 +368,7 @@ export class RubiksCube extends THREE.Group {
     const tileHalfDepth = tileThickness * 0.5 + tileThickness * 0.42;
     const tileProtrusion = tileCenterBump + tileHalfDepth;
 
-    const layers: FaceLayer[] = [-1, 0, 1];
+    const layers: StandardLayer[] = [-1, 0, 1];
     for (const x of layers) {
       for (const y of layers) {
         for (const z of layers) {
@@ -483,6 +486,142 @@ export class RubiksCube extends THREE.Group {
     }
   }
 
+  /**
+   * Builds the 18-cubie 3x3x2 Domino Cuboid (`3.00` wide × `2.00` tall × `3.00` deep),
+   * centered at local `(0, 0, 0)` with exact grid coordinates:
+   * - `X ∈ {-1, 0, +1}`, `Y ∈ {-0.5, +0.5}`, `Z ∈ {-1, 0, +1}` (scaled by `cubieSpacing`).
+   * Styled with a matte obsidian inner body, glossy Ivory White top (`+Y`), Amber Yellow
+   * bottom (`-Y`), and crisp color-coded side bands around the 2-layer perimeter.
+   */
+  private buildDominoCubies(): void {
+    const cubieSize = this.cubieSpacing * 0.962;
+    const tileSize = cubieSize * 0.82;
+    const tileThickness = 0.0022;
+    const tileOffset = cubieSize / 2 + tileThickness * 0.35;
+    const tileHalfDepth = tileThickness * 0.5 + tileThickness * 0.42;
+    const tileProtrusion = tileOffset + tileHalfDepth - cubieSize / 2;
+
+    const bodyGeo = this.trackGeometry(
+      new RoundedBoxGeometry(
+        cubieSize,
+        cubieSize,
+        cubieSize,
+        3,
+        cubieSize * 0.11,
+      ),
+    );
+    const tileGeo = this.trackGeometry(
+      createRoundedRectTileGeometry(
+        tileSize,
+        tileSize,
+        tileSize * 0.16,
+        tileThickness,
+      ),
+    );
+
+    const xzLayers: StandardLayer[] = [-1, 0, 1];
+    const yLayers: Array<-0.5 | 0.5> = [-0.5, 0.5];
+
+    for (const x of xzLayers) {
+      for (const y of yLayers) {
+        for (const z of xzLayers) {
+          const cubieGroup = new THREE.Group();
+          cubieGroup.name = `DominoCubie_${x}_${y > 0 ? 'top' : 'bot'}_${z}`;
+          const solvedPos = new THREE.Vector3(
+            x * this.cubieSpacing,
+            y * this.cubieSpacing,
+            z * this.cubieSpacing,
+          );
+          cubieGroup.position.copy(solvedPos);
+
+          const body = new THREE.Mesh(bodyGeo, this.materials.dominoCubeCore);
+          body.castShadow = true;
+          body.receiveShadow = true;
+          cubieGroup.add(body);
+
+          // Glossy Ivory White top (+Y) and Amber Yellow bottom (-Y)
+          if (y === 0.5) {
+            this.addTile(
+              cubieGroup,
+              tileGeo,
+              this.materials.dominoCubeTiles.white,
+              new THREE.Vector3(0, tileOffset, 0),
+              new THREE.Euler(-Math.PI / 2, 0, 0),
+            );
+          }
+          if (y === -0.5) {
+            this.addTile(
+              cubieGroup,
+              tileGeo,
+              this.materials.dominoCubeTiles.yellow,
+              new THREE.Vector3(0, -tileOffset, 0),
+              new THREE.Euler(Math.PI / 2, 0, 0),
+            );
+          }
+          // Bold color-coded side bands around the 2-layer perimeter
+          if (x === 1) {
+            this.addTile(
+              cubieGroup,
+              tileGeo,
+              this.materials.dominoCubeTiles.red,
+              new THREE.Vector3(tileOffset, 0, 0),
+              new THREE.Euler(0, Math.PI / 2, 0),
+            );
+          }
+          if (x === -1) {
+            this.addTile(
+              cubieGroup,
+              tileGeo,
+              this.materials.dominoCubeTiles.orange,
+              new THREE.Vector3(-tileOffset, 0, 0),
+              new THREE.Euler(0, -Math.PI / 2, 0),
+            );
+          }
+          if (z === 1) {
+            this.addTile(
+              cubieGroup,
+              tileGeo,
+              this.materials.dominoCubeTiles.green,
+              new THREE.Vector3(0, 0, tileOffset),
+              new THREE.Euler(0, 0, 0),
+            );
+          }
+          if (z === -1) {
+            this.addTile(
+              cubieGroup,
+              tileGeo,
+              this.materials.dominoCubeTiles.blue,
+              new THREE.Vector3(0, 0, -tileOffset),
+              new THREE.Euler(0, Math.PI, 0),
+            );
+          }
+
+          const half = cubieSize / 2;
+          const localMin = new THREE.Vector3(
+            -half - (x === -1 ? tileProtrusion : 0),
+            -half - (y === -0.5 ? tileProtrusion : 0),
+            -half - (z === -1 ? tileProtrusion : 0),
+          );
+          const localMax = new THREE.Vector3(
+            half + (x === 1 ? tileProtrusion : 0),
+            half + (y === 0.5 ? tileProtrusion : 0),
+            half + (z === 1 ? tileProtrusion : 0),
+          );
+
+          this.add(cubieGroup);
+          this.cubies.push({
+            group: cubieGroup,
+            coord: {x, y, z},
+            solvedCoord: {x, y, z},
+            solvedPos,
+            localMin,
+            localMax,
+          });
+        }
+      }
+    }
+  }
+
   private addTile(
     parent: THREE.Group,
     geometry: THREE.BufferGeometry,
@@ -499,17 +638,28 @@ export class RubiksCube extends THREE.Group {
   }
 
   /**
-   * Identifies the 9 cubies belonging to the requested layer strictly by their
-   * exact discrete integer layer coordinate (`-1`, `0`, `1`).
+   * Identifies the cubies belonging to the requested layer strictly by their
+   * discrete layer coordinates:
+   * - 3x3x3 (`classic`, `mirror`): 9 cubies matching `coord[axis] === layer` (`-1`, `0`, `1`).
+   * - 3x3x2 (`domino`): 9 cubies on `U` (`y > 0`) / `D` (`y < 0`), or 6 cubies on `L`/`R`/`F`/`B`.
    */
   getLayerCubies(axis: FaceAxis, layer: FaceLayer): CubieUnit[] {
+    if (this.puzzleType === 'domino') {
+      if (axis === 'y') {
+        return this.cubies.filter((unit) =>
+          layer > 0 ? unit.coord.y > 0 : unit.coord.y < 0,
+        );
+      }
+      return this.cubies.filter((unit) =>
+        layer > 0 ? unit.coord[axis] > 0.5 : unit.coord[axis] < -0.5,
+      );
+    }
     return this.cubies.filter((unit) => unit.coord[axis] === layer);
   }
 
   /**
-   * Measures exact outer surface extents of the puzzle and every gripped 3-cubie strip
-   * in cube-local space so robotic grippers sit flush on protruding or recessed blocks.
-   * For `'classic'`, returns exact symmetric `CUBE_OUTER_HALF` to keep Classic 3x3 bit-identical.
+   * Measures exact outer surface extents of the puzzle and every gripped strip
+   * in cube-local space so robotic grippers sit flush on Classic, Mirror, and Domino faces.
    */
   getBoundsSnapshot(): PuzzleBoundsSnapshot {
     if (this.puzzleType === 'classic') {
@@ -537,6 +687,52 @@ export class RubiksCube extends THREE.Group {
           F: {...symmetricFace},
           B: {...symmetricFace},
           U_FB: {...symmetricFace},
+        },
+      };
+    }
+
+    if (this.puzzleType === 'domino') {
+      const cubieSize = this.cubieSpacing * 0.962;
+      const tileThickness = 0.0022;
+      const tileOffset = cubieSize / 2 + tileThickness * 0.35;
+      const tileHalfDepth = tileThickness * 0.5 + tileThickness * 0.42;
+      const tileProtrusion = tileOffset + tileHalfDepth - cubieSize / 2;
+
+      const exactHalfXZ = this.cubieSpacing + cubieSize / 2 + tileProtrusion;
+      const exactHalfY = this.cubieSpacing * 0.5 + cubieSize / 2 + tileProtrusion;
+      const hXZ = exactHalfXZ + MIRROR_FLUSH_EPS;
+      const hY = exactHalfY + MIRROR_FLUSH_EPS;
+
+      const sideFace: FaceStripMetrics = {
+        stripNormal: hXZ,
+        faceNormal: hXZ,
+        jawPos: hXZ,
+        jawNeg: hXZ,
+      };
+      const topBottomFace: FaceStripMetrics = {
+        stripNormal: hY,
+        faceNormal: hY,
+        jawPos: hXZ,
+        jawNeg: hXZ,
+      };
+
+      return {
+        puzzleType: 'domino',
+        minX: -exactHalfXZ,
+        maxX: exactHalfXZ,
+        minY: -exactHalfY,
+        maxY: exactHalfY,
+        minZ: -exactHalfXZ,
+        maxZ: exactHalfXZ,
+        maxSpinRadius: Math.hypot(hXZ, hXZ),
+        faces: {
+          L: {...sideFace},
+          R: {...sideFace},
+          U: {...topBottomFace},
+          D: {...topBottomFace},
+          F: {...sideFace},
+          B: {...sideFace},
+          U_FB: {...topBottomFace},
         },
       };
     }
@@ -738,7 +934,7 @@ export class RubiksCube extends THREE.Group {
   }
 
   /**
-   * Mathematically verifies that all 27 cubies sit at their exact solved integer grid
+   * Mathematically verifies that all cubies sit at their exact solved discrete grid
    * coordinates, exact solved local positions, and exact solved orientations.
    */
   isSolved(): boolean {
@@ -748,7 +944,7 @@ export class RubiksCube extends THREE.Group {
 
     for (const unit of this.cubies) {
       const {x, y, z} = unit.solvedCoord;
-      // 1. Exact integer grid slot & zero-drift local position
+      // 1. Exact grid slot & zero-drift local position
       if (unit.coord.x !== x || unit.coord.y !== y || unit.coord.z !== z) {
         return false;
       }
@@ -757,17 +953,29 @@ export class RubiksCube extends THREE.Group {
       }
 
       // 2. Orientation check: corners & edges must match exact identity;
-      //    face centers (|x|+|y|+|z| === 1) must preserve their outward face normal.
-      const nonZeroAxes = Math.abs(x) + Math.abs(y) + Math.abs(z);
-      if (nonZeroAxes >= 2) {
-        if (unit.group.quaternion.angleTo(identity) > 1e-4) {
+      //    single-color face centers must preserve their outward face normal.
+      if (this.puzzleType === 'domino') {
+        if (x === 0 && z === 0) {
+          expected.set(0, Math.sign(y), 0);
+          normal.copy(expected).applyQuaternion(unit.group.quaternion);
+          if (normal.dot(expected) < 0.9999) {
+            return false;
+          }
+        } else if (unit.group.quaternion.angleTo(identity) > 1e-4) {
           return false;
         }
-      } else if (nonZeroAxes === 1) {
-        expected.set(x, y, z);
-        normal.copy(expected).applyQuaternion(unit.group.quaternion);
-        if (normal.dot(expected) < 0.9999) {
-          return false;
+      } else {
+        const nonZeroAxes = Math.abs(x) + Math.abs(y) + Math.abs(z);
+        if (nonZeroAxes >= 2) {
+          if (unit.group.quaternion.angleTo(identity) > 1e-4) {
+            return false;
+          }
+        } else if (nonZeroAxes === 1) {
+          expected.set(x, y, z);
+          normal.copy(expected).applyQuaternion(unit.group.quaternion);
+          if (normal.dot(expected) < 0.9999) {
+            return false;
+          }
         }
       }
     }

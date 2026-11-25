@@ -4,6 +4,7 @@ import * as THREE from 'three';
 
 import {
   ContinuousScrambleGenerator,
+  DOMINO_MOVES,
   MOVE_SPECS,
   computeOptimizedSolution,
   generateScrambleSequence,
@@ -56,6 +57,15 @@ function createHeadlessMaterials(): LabMaterialLibrary {
       yAxis: phys,
       zAxis: phys,
     },
+    dominoCubeCore: std,
+    dominoCubeTiles: {
+      white: phys,
+      yellow: phys,
+      red: phys,
+      orange: phys,
+      blue: phys,
+      green: phys,
+    },
     contactShadow: basic,
     dispose: () => {
       std.dispose();
@@ -73,8 +83,8 @@ function makeSeededRng(seed: number): () => number {
   };
 }
 
-test('all 12 standard cube moves have exact inverses and consistent axes', () => {
-  assert.equal(ALL_CUBE_MOVES.length, 12);
+test('all 16 cube moves (12 quarter-turns + 4 half-turns) have exact inverses and consistent axes', () => {
+  assert.equal(ALL_CUBE_MOVES.length, 16);
   for (const notation of ALL_CUBE_MOVES) {
     const spec = getMoveSpec(notation);
     const inv = getInverseMove(notation);
@@ -83,7 +93,14 @@ test('all 12 standard cube moves have exact inverses and consistent axes', () =>
     assert.equal(spec.face, invSpec.face);
     assert.equal(spec.axis, invSpec.axis);
     assert.equal(spec.layer, invSpec.layer);
-    assert.equal(spec.quarterTurns, -invSpec.quarterTurns);
+    if (spec.isHalfTurn) {
+      assert.equal(inv, notation);
+      assert.equal(spec.quarterTurns, 2);
+      assert.ok(Math.abs(Math.abs(spec.angleRad) - Math.PI) < 1e-9);
+    } else {
+      assert.equal(spec.quarterTurns, -invSpec.quarterTurns);
+      assert.ok(Math.abs(Math.abs(spec.angleRad) - Math.PI / 2) < 1e-9);
+    }
     assert.equal(getInverseMove(inv), notation);
   }
 });
@@ -449,6 +466,171 @@ test('Mirror Cube has exact M=0.86 core alignment, 3.00-unit solved footprint, z
   cube.dispose();
   materials.dispose();
 });
+
+test('Domino Cuboid optimizer cancels 180-degree pairs, handles commuting half-turns, and collapses U/D triples', () => {
+  // Identical 180-degree self-inverse cancellation
+  assert.deepEqual(optimizeMoveSequence(['R2', 'R2'], 'domino'), []);
+  assert.deepEqual(optimizeMoveSequence(['L2', 'L2'], 'domino'), []);
+  assert.deepEqual(optimizeMoveSequence(['F2', 'F2'], 'domino'), []);
+  assert.deepEqual(optimizeMoveSequence(['B2', 'B2'], 'domino'), []);
+
+  // Commuting opposite 180-degree faces: R2 L2 R2 -> L2, F2 B2 F2 -> B2
+  assert.deepEqual(optimizeMoveSequence(['R2', 'L2', 'R2'], 'domino'), ['L2']);
+  assert.deepEqual(optimizeMoveSequence(['F2', 'B2', 'F2'], 'domino'), ['B2']);
+
+  // Cascading cancellation across U/D and 180-degree side flips
+  assert.deepEqual(optimizeMoveSequence(['R2', 'U', "U'", 'R2'], 'domino'), []);
+  assert.deepEqual(
+    optimizeMoveSequence(['F2', 'U', 'U', 'U', 'D', "D'", 'F2'], 'domino'),
+    ['F2', "U'", 'F2'],
+  );
+
+  // U/D double turn stays two quarter-turns (never emits invalid U2)
+  assert.deepEqual(optimizeMoveSequence(['U', 'U'], 'domino'), ['U', 'U']);
+
+  // computeOptimizedSolution reverses and inverts Domino moves properly
+  assert.deepEqual(
+    computeOptimizedSolution(['U', 'R2', "D'", 'F2'], 'domino'),
+    ['F2', 'D', 'R2', "U'"],
+  );
+});
+
+test('ContinuousScrambleGenerator in domino mode produces 120 balanced legal Domino moves without redundancy', () => {
+  const opposite: Record<CubeFace, CubeFace> = {
+    U: 'D',
+    D: 'U',
+    L: 'R',
+    R: 'L',
+    F: 'B',
+    B: 'F',
+  };
+  const legalDomino = new Set<CubeMoveNotation>(DOMINO_MOVES);
+
+  const gen = new ContinuousScrambleGenerator(makeSeededRng(2026));
+  const moves: CubeMoveNotation[] = [];
+  for (let i = 0; i < 120; i++) {
+    const move = gen.next('domino');
+    assert.ok(legalDomino.has(move), `Illegal Domino move generated: ${move}`);
+    moves.push(move);
+    const face = getMoveSpec(move).face;
+    if (i > 0) {
+      assert.notEqual(face, getMoveSpec(moves[i - 1]).face);
+    }
+    if (i > 1) {
+      const prev = getMoveSpec(moves[i - 1]).face;
+      const prevPrev = getMoveSpec(moves[i - 2]).face;
+      assert.ok(!(face === prevPrev && prev === opposite[face]));
+    }
+  }
+
+  const counts = Object.values(gen.getFaceCounts());
+  const minCount = Math.min(...counts);
+  const maxCount = Math.max(...counts);
+  assert.ok(
+    maxCount - minCount <= 2,
+    `Expected balanced Domino face distribution over 120 moves, got ${JSON.stringify(gen.getFaceCounts())}`,
+  );
+});
+
+test('3x3x2 Domino Cuboid has 18 cubies, 3x2x3 footprint, zero cubie overlap over 50 moves, and exact Auto-Solve', () => {
+  const materials = createHeadlessMaterials();
+  const cube = new RubiksCube(materials, 'domino');
+
+  assert.equal(cube.getPuzzleType(), 'domino');
+  assert.equal(cube.cubies.length, 18);
+  assert.equal(cube.isSolved(), true);
+
+  // Verify exact 3x2x3 solved bounds (~0.214m x 0.144m x 0.214m) centered at (0,0,0)
+  const solvedBounds = cube.getBoundsSnapshot();
+  assert.equal(solvedBounds.puzzleType, 'domino');
+  assert.ok(Math.abs(solvedBounds.maxX + solvedBounds.minX) < 1e-6);
+  assert.ok(Math.abs(solvedBounds.maxY + solvedBounds.minY) < 1e-6);
+  assert.ok(Math.abs(solvedBounds.maxZ + solvedBounds.minZ) < 1e-6);
+  assert.ok(Math.abs((solvedBounds.maxX - solvedBounds.minX) - 0.214) < 0.004);
+  assert.ok(Math.abs((solvedBounds.maxY - solvedBounds.minY) - 0.144) < 0.004);
+  assert.ok(Math.abs((solvedBounds.maxZ - solvedBounds.minZ) - 0.214) < 0.004);
+
+  // Verify exact cubie counts per layer: 9 on U/D, 6 on L2/R2/F2/B2
+  assert.equal(cube.getLayerCubies('y', 1).length, 9);
+  assert.equal(cube.getLayerCubies('y', -1).length, 9);
+  assert.equal(cube.getLayerCubies('x', -1).length, 6);
+  assert.equal(cube.getLayerCubies('x', 1).length, 6);
+  assert.equal(cube.getLayerCubies('z', 1).length, 6);
+  assert.equal(cube.getLayerCubies('z', -1).length, 6);
+
+  const assertZeroDominoDriftAndOverlap = (stepLabel: string) => {
+    const occupied = new Set<string>();
+    const boxes = cube.cubies.map((u) => {
+      assert.equal(u.group.parent, cube);
+      const {x, y, z} = u.coord;
+      assert.ok(x === -1 || x === 0 || x === 1, `Bad X coord ${x} at ${stepLabel}`);
+      assert.ok(y === -0.5 || y === 0.5, `Bad Y coord ${y} at ${stepLabel}`);
+      assert.ok(z === -1 || z === 0 || z === 1, `Bad Z coord ${z} at ${stepLabel}`);
+      occupied.add(`${x},${y},${z}`);
+
+      assert.ok(Math.abs(u.group.position.x - x * cube.cubieSpacing) < 1e-12);
+      assert.ok(Math.abs(u.group.position.y - y * cube.cubieSpacing) < 1e-12);
+      assert.ok(Math.abs(u.group.position.z - z * cube.cubieSpacing) < 1e-12);
+
+      const a = u.localMin.clone().applyQuaternion(u.group.quaternion).add(u.group.position);
+      const b = u.localMax.clone().applyQuaternion(u.group.quaternion).add(u.group.position);
+      return {
+        name: u.group.name,
+        minX: Math.min(a.x, b.x),
+        maxX: Math.max(a.x, b.x),
+        minY: Math.min(a.y, b.y),
+        maxY: Math.max(a.y, b.y),
+        minZ: Math.min(a.z, b.z),
+        maxZ: Math.max(a.z, b.z),
+      };
+    });
+    assert.equal(occupied.size, 18, `Expected 18 unique Domino slots at ${stepLabel}`);
+
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const A = boxes[i];
+        const B = boxes[j];
+        const ox = Math.min(A.maxX, B.maxX) - Math.max(A.minX, B.minX);
+        const oy = Math.min(A.maxY, B.maxY) - Math.max(A.minY, B.minY);
+        const oz = Math.min(A.maxZ, B.maxZ) - Math.max(A.minZ, B.minZ);
+        assert.ok(
+          ox <= 1e-4 || oy <= 1e-4 || oz <= 1e-4,
+          `Domino cubie overlap at ${stepLabel}: ${A.name} vs ${B.name}`,
+        );
+      }
+    }
+  };
+
+  assertZeroDominoDriftAndOverlap('solved');
+
+  // Execute 50 random Domino moves (mix of ±90° U/D and 180° L2/R2/F2/B2)
+  const gen = new ContinuousScrambleGenerator(makeSeededRng(3322));
+  for (let i = 0; i < 50; i++) {
+    const move = gen.next('domino');
+    cube.beginMove(move);
+    cube.setActiveMoveProgress(0.5);
+    cube.setActiveMoveProgress(1);
+    cube.commitActiveMove(true);
+    assertZeroDominoDriftAndOverlap(`scramble ${i + 1} (${move})`);
+  }
+  assert.equal(cube.isSolved(), false);
+
+  // Optimized Auto-Solve restores 100% solved Domino Cuboid
+  const solution = computeOptimizedSolution(cube.getMoveHistory(), 'domino');
+  for (let i = 0; i < solution.length; i++) {
+    cube.beginMove(solution[i]);
+    cube.setActiveMoveProgress(0.5);
+    cube.setActiveMoveProgress(1);
+    cube.commitActiveMove(false);
+    assertZeroDominoDriftAndOverlap(`solve ${i + 1} (${solution[i]})`);
+  }
+  cube.clearMoveHistory();
+  assert.equal(cube.isSolved(), true, 'Domino Cuboid must return to 100% solved state');
+
+  cube.dispose();
+  materials.dispose();
+});
+
 
 
 

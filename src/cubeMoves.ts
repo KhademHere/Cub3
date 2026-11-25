@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-import type {FaceAxis, FaceLayer} from './types';
+import type {FaceAxis, FaceLayer, PuzzleType} from './types';
 
 export type CubeFace = 'U' | 'D' | 'L' | 'R' | 'F' | 'B';
 export type CubeMoveNotation =
@@ -10,24 +10,30 @@ export type CubeMoveNotation =
   | "D'"
   | 'L'
   | "L'"
+  | 'L2'
   | 'R'
   | "R'"
+  | 'R2'
   | 'F'
   | "F'"
+  | 'F2'
   | 'B'
-  | "B'";
+  | "B'"
+  | 'B2';
 
 export interface CubeMoveSpec {
   notation: CubeMoveNotation;
   face: CubeFace;
   axis: FaceAxis;
   layer: FaceLayer;
-  /** Signed quarter-turns (+1 = +90deg, -1 = -90deg) around the positive world axis. */
-  quarterTurns: 1 | -1;
+  /** Signed quarter-turns (+1 = +90deg, -1 = -90deg, 2 = 180deg) around the positive world axis. */
+  quarterTurns: 1 | -1 | 2;
   /** Exact target rotation in radians around the cube's local axis. */
   angleRad: number;
-  /** True for prime (counter-clockwise) moves. */
+  /** True for prime (counter-clockwise) quarter-turn moves. */
   prime: boolean;
+  /** True for 180-degree half-turn moves (L2, R2, F2, B2). */
+  isHalfTurn: boolean;
 }
 
 const FACE_META: Record<
@@ -43,6 +49,16 @@ const FACE_META: Record<
 };
 
 export const ALL_FACES: readonly CubeFace[] = ['U', 'D', 'L', 'R', 'F', 'B'];
+export const DOMINO_MOVES: readonly CubeMoveNotation[] = [
+  'U',
+  "U'",
+  'D',
+  "D'",
+  'L2',
+  'R2',
+  'F2',
+  'B2',
+];
 
 export const MOVE_SPECS: Record<CubeMoveNotation, CubeMoveSpec> = (() => {
   const specs = {} as Record<CubeMoveNotation, CubeMoveSpec>;
@@ -61,6 +77,7 @@ export const MOVE_SPECS: Record<CubeMoveNotation, CubeMoveSpec> = (() => {
       quarterTurns: cw,
       angleRad: cw * (Math.PI / 2),
       prime: false,
+      isHalfTurn: false,
     };
     specs[ccwNotation] = {
       notation: ccwNotation,
@@ -70,7 +87,22 @@ export const MOVE_SPECS: Record<CubeMoveNotation, CubeMoveSpec> = (() => {
       quarterTurns: ccw,
       angleRad: ccw * (Math.PI / 2),
       prime: true,
+      isHalfTurn: false,
     };
+
+    if (face === 'L' || face === 'R' || face === 'F' || face === 'B') {
+      const halfNotation = `${face}2` as CubeMoveNotation;
+      specs[halfNotation] = {
+        notation: halfNotation,
+        face,
+        axis: meta.axis,
+        layer: meta.layer,
+        quarterTurns: 2,
+        angleRad: cw * Math.PI,
+        prime: false,
+        isHalfTurn: true,
+      };
+    }
   }
   return specs;
 })();
@@ -80,6 +112,9 @@ export function getMoveSpec(notation: CubeMoveNotation): CubeMoveSpec {
 }
 
 export function getInverseMove(notation: CubeMoveNotation): CubeMoveNotation {
+  if (notation.endsWith('2')) {
+    return notation;
+  }
   return notation.endsWith("'")
     ? (notation[0] as CubeMoveNotation)
     : (`${notation}'` as CubeMoveNotation);
@@ -87,8 +122,10 @@ export function getInverseMove(notation: CubeMoveNotation): CubeMoveNotation {
 
 /**
  * Stateful on-the-fly scramble move generator supporting indefinite continuous scrambling.
- * - Never repeats the exact same face twice in a row (no R followed by R or R').
- * - Prevents opposite-face ABA redundancies (e.g. R, L, R').
+ * - Supports both 3x3x3 puzzles (all 12 quarter turns) and 3x3x2 Domino Cuboid
+ *   (`U`, `U'`, `D`, `D'`, `L2`, `R2`, `F2`, `B2`).
+ * - Never repeats the exact same face twice in a row (no R followed by R, R', or R2).
+ * - Prevents opposite-face ABA redundancies (e.g. R, L, R' or R2, L2, R2).
  * - Continuously balances face frequency so turns remain evenly distributed across all 6 faces.
  */
 export class ContinuousScrambleGenerator {
@@ -109,7 +146,7 @@ export class ContinuousScrambleGenerator {
   }
 
   /** Generates the next balanced, non-redundant random face turn on the fly. */
-  next(): CubeMoveNotation {
+  next(puzzleType: PuzzleType = 'classic'): CubeMoveNotation {
     const allowedFaces = ALL_FACES.filter((face) => {
       if (face === this.prevFace) return false;
       if (
@@ -128,8 +165,17 @@ export class ContinuousScrambleGenerator {
     const pool = balanced.length > 0 ? balanced : allowedFaces;
 
     const chosenFace = pool[Math.floor(this.rng() * pool.length)];
-    const prime = this.rng() < 0.5;
-    const notation = (prime ? `${chosenFace}'` : chosenFace) as CubeMoveNotation;
+    let notation: CubeMoveNotation;
+    if (
+      puzzleType === 'domino' &&
+      chosenFace !== 'U' &&
+      chosenFace !== 'D'
+    ) {
+      notation = `${chosenFace}2` as CubeMoveNotation;
+    } else {
+      const prime = this.rng() < 0.5;
+      notation = (prime ? `${chosenFace}'` : chosenFace) as CubeMoveNotation;
+    }
 
     this.faceCounts[chosenFace] += 1;
     this.prevPrevFace = this.prevFace;
@@ -155,6 +201,7 @@ export class ContinuousScrambleGenerator {
 export function generateScrambleSequence(
   rng: () => number = Math.random,
   lengthOverride?: number,
+  puzzleType: PuzzleType = 'classic',
 ): CubeMoveNotation[] {
   const length =
     lengthOverride !== undefined
@@ -164,7 +211,7 @@ export function generateScrambleSequence(
   const generator = new ContinuousScrambleGenerator(rng);
   const sequence: CubeMoveNotation[] = [];
   for (let i = 0; i < length; i++) {
-    sequence.push(generator.next());
+    sequence.push(generator.next(puzzleType));
   }
   return sequence;
 }
@@ -172,16 +219,18 @@ export function generateScrambleSequence(
 /**
  * Optimizes a cube move sequence to eliminate all redundant turns:
  * - Cancels adjacent inverse pairs (e.g., `L L'` -> removed, `R L R'` -> `L`)
+ * - Cancels adjacent identical 180° turns (e.g., `R2 R2` -> removed, `R2 L2 R2` -> `L2`)
  * - Collapses triple identical turns into a single inverse (`U U U` -> `U'`)
  * - Cancels 4 identical turns (`F F F F` -> removed)
  * - Repeats passes until full fixed-point convergence so cascading cancellations
- *   (e.g., `R U U' R'`) also reduce cleanly to empty.
+ *   (e.g., `R U U' R'` or `R2 U U' R2`) also reduce cleanly to empty.
  *
  * Uses exact group theory on disjoint opposite-face pairs (`{U,D}`, `{L,R}`, `{F,B}`),
  * which commute because they act on non-overlapping layers along the same axis.
  */
 export function optimizeMoveSequence(
   moves: readonly CubeMoveNotation[],
+  puzzleType: PuzzleType = 'classic',
 ): CubeMoveNotation[] {
   let current: CubeMoveNotation[] = [...moves];
 
@@ -197,6 +246,7 @@ export function optimizeMoveSequence(
       // Collect maximal contiguous run of moves sharing the same rotation axis
       let j = i;
       const runFaces = new Map<CubeFace, number>();
+      const faceHadHalfTurn = new Map<CubeFace, boolean>();
       const faceOrder: CubeFace[] = [];
 
       while (j < current.length && getMoveSpec(current[j]).axis === axis) {
@@ -205,8 +255,11 @@ export function optimizeMoveSequence(
           faceOrder.push(spec.face);
           runFaces.set(spec.face, 0);
         }
-        // Track clockwise quarter-turns (+1 for CW face move, -1 for prime)
-        const delta = spec.prime ? -1 : 1;
+        if (spec.isHalfTurn) {
+          faceHadHalfTurn.set(spec.face, true);
+        }
+        // Track clockwise quarter-turns (+1 CW, -1 prime, +2 half-turn)
+        const delta = spec.isHalfTurn ? 2 : spec.prime ? -1 : 1;
         runFaces.set(spec.face, (runFaces.get(spec.face) ?? 0) + delta);
         j += 1;
       }
@@ -218,7 +271,15 @@ export function optimizeMoveSequence(
         if (mod === 1) {
           reduced.push(face as CubeMoveNotation);
         } else if (mod === 2) {
-          reduced.push(face as CubeMoveNotation, face as CubeMoveNotation);
+          const emitHalfTurn =
+            face !== 'U' &&
+            face !== 'D' &&
+            (puzzleType === 'domino' || faceHadHalfTurn.get(face) === true);
+          if (emitHalfTurn) {
+            reduced.push(`${face}2` as CubeMoveNotation);
+          } else {
+            reduced.push(face as CubeMoveNotation, face as CubeMoveNotation);
+          }
         } else if (mod === 3) {
           reduced.push(`${face}'` as CubeMoveNotation);
         }
@@ -244,18 +305,19 @@ export function optimizeMoveSequence(
 
 /**
  * Generates an exact, optimized Part 3 Auto-Solve queue from accumulated `moveHistory`:
- * 1. Reverses the recorded history and inverts every move (`R` <-> `R'`).
+ * 1. Reverses the recorded history and inverts every move (`R` <-> `R'`, `R2` <-> `R2`).
  * 2. Runs the fixed-point Move Optimization Pass for an intelligent, minimal solve.
  */
 export function computeOptimizedSolution(
   moveHistory: readonly CubeMoveNotation[],
+  puzzleType: PuzzleType = 'classic',
 ): CubeMoveNotation[] {
   if (moveHistory.length === 0) return [];
   const reversedInverses: CubeMoveNotation[] = [];
   for (let i = moveHistory.length - 1; i >= 0; i--) {
     reversedInverses.push(getInverseMove(moveHistory[i]));
   }
-  return optimizeMoveSequence(reversedInverses);
+  return optimizeMoveSequence(reversedInverses, puzzleType);
 }
 
 const _rotMat = new THREE.Matrix4();

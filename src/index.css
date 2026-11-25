@@ -614,13 +614,15 @@ canvas {
   white-space: nowrap;
 }
 
+@media (max-width: 1080px) {
+  .puzzle-cluster {
+    top: 70px;
+  }
+}
+
 @media (max-width: 960px) {
   .control-hint {
     display: none;
-  }
-
-  .puzzle-cluster {
-    top: 70px;
   }
 }
 

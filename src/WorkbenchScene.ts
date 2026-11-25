@@ -147,9 +147,11 @@ export class WorkbenchScene extends xb.Script {
       }
       if (this.xrPuzzleButton) {
         this.xrPuzzleButton.label =
-          snapshot.puzzleType === 'mirror'
-            ? 'Switch: Classic 3x3'
-            : 'Switch: Mirror Cube';
+          snapshot.puzzleType === 'classic'
+            ? 'Next: Mirror Cube'
+            : snapshot.puzzleType === 'mirror'
+              ? 'Next: 3x3x2 Domino'
+              : 'Next: Classic 3x3';
         this.xrPuzzleButton.disabled = snapshot.puzzleSwitcherDisabled;
       }
     });
@@ -447,11 +449,12 @@ export class WorkbenchScene extends xb.Script {
       },
     });
     this.xrPuzzleButton = new xb.UIButton({
-      label: 'Switch: Mirror Cube',
+      label: 'Next: Mirror Cube',
       style: {width: '100%'},
       onClick: () => {
+        const cur = this.controller?.getPuzzleType() ?? 'classic';
         const next: PuzzleType =
-          this.controller?.getPuzzleType() === 'mirror' ? 'classic' : 'mirror';
+          cur === 'classic' ? 'mirror' : cur === 'mirror' ? 'domino' : 'classic';
         this.requestPuzzleSwitch(next);
       },
     });

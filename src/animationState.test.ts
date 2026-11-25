@@ -592,7 +592,7 @@ function makeMockMaterials(): LabMaterialLibrary {
   );
   return new Proxy({} as LabMaterialLibrary, {
     get: (_target, prop) => {
-      if (prop === 'cubeTiles' || prop === 'mirrorCubeTiles') {
+      if (prop === 'cubeTiles' || prop === 'mirrorCubeTiles' || prop === 'dominoCubeTiles') {
         return nestedProxy;
       }
       if (prop === 'dispose') {
@@ -1221,6 +1221,236 @@ test('Mirror Cube 3D mesh SAT collision audit: zero arm-to-arm overlap, zero cub
   rightArm.dispose();
   materials.dispose();
 });
+
+test('3-way Puzzle Switcher transitions Classic -> Mirror -> Domino -> Classic cleanly from STANDBY and HOLDING', () => {
+  const choreo = new RoboticsChoreography();
+
+  // Classic -> Domino from STANDBY
+  assert.equal(choreo.requestPuzzleSwitch('domino'), true);
+  assert.equal(choreo.getState(), 'SWAPPING');
+  assert.equal(choreo.getSnapshot().statusLabel, 'SWAPPING • 3x3x2 DOMINO');
+  let committed: string | null = null;
+  let steps = 0;
+  while (choreo.getState() !== 'STANDBY' && steps < 400) {
+    const f = choreo.step(0.02);
+    if (f.commitPuzzleSwap) committed = f.commitPuzzleSwap;
+    steps += 1;
+  }
+  assert.equal(committed, 'domino');
+  assert.equal(choreo.getPuzzleType(), 'domino');
+  assert.equal(choreo.getSnapshot().statusLabel, 'STANDBY • 3x3x2 DOMINO');
+
+  // Pick Up Domino -> HOLDING, then switch directly to Mirror -> must Put Down first!
+  assert.equal(choreo.triggerPrimaryAction(), true);
+  while (choreo.getState() !== 'HOLDING') {
+    choreo.step(0.02);
+  }
+  assert.equal(choreo.getSnapshot().statusLabel, 'HOLDING — READY • 3x3x2');
+  assert.equal(choreo.requestPuzzleSwitch('mirror'), true);
+  assert.equal(choreo.getState(), 'LOWERING');
+
+  committed = null;
+  steps = 0;
+  while (choreo.getState() !== 'STANDBY' && steps < 800) {
+    const f = choreo.step(0.02);
+    if (f.commitPuzzleSwap) committed = f.commitPuzzleSwap;
+    steps += 1;
+  }
+  assert.equal(committed, 'mirror');
+  assert.equal(choreo.getPuzzleType(), 'mirror');
+  assert.equal(choreo.getSnapshot().statusLabel, 'STANDBY • MIRROR CUBE');
+});
+
+test('3x3x2 Domino Cuboid 3D mesh SAT collision audit: zero arm overlap, zero cubie clipping, continuous 180° flips, and exact Auto-Solve', () => {
+  const materials = makeMockMaterials();
+  const leftArm = new RoboticArm('left', materials);
+  const rightArm = new RoboticArm('right', materials);
+  const cube = new RubiksCube(materials, 'domino');
+  const leftTracked = collectArmMeshes(leftArm);
+  const rightTracked = collectArmMeshes(rightArm);
+
+  const choreo = new RoboticsChoreography();
+  choreo.syncPuzzleBounds(cube.getBoundsSnapshot());
+
+  // 16-move Domino scramble covering all 8 legal moves (U, U', D, D', L2, R2, F2, B2) twice each
+  const dominoScramble: CubeMoveNotation[] = [
+    'U', 'R2', "D'", 'F2', 'L2', "U'", 'B2', 'D',
+    'F2', 'U', 'L2', "D'", 'R2', 'B2', "U'", 'D',
+  ];
+
+  let activeTurnId = -1;
+  let worstArmOverlap = 0;
+  let worstArmDetail = '';
+  let worstCubeOverlap = 0;
+  let worstCubeDetail = '';
+  let lowestArmY = Infinity;
+  let lowestArmDetail = '';
+  let maxHalfTurnWristRoll = 0;
+  let framesChecked = 0;
+
+  const cubieHalf = new THREE.Vector3();
+  const cubieCenter = new THREE.Vector3();
+
+  const applyAndAudit = (frame: ReturnType<RoboticsChoreography['evaluateFrame']>) => {
+    framesChecked += 1;
+
+    const recordHistory = frame.committedMovesRecordHistory;
+    if (frame.committedMoves.length > 0) {
+      for (const completedMove of frame.committedMoves) {
+        if (activeTurnId === -1) {
+          cube.applyMoveInstant(completedMove, recordHistory);
+        } else {
+          cube.commitActiveMove(recordHistory);
+          activeTurnId = -1;
+        }
+      }
+      choreo.syncPuzzleBounds(cube.getBoundsSnapshot());
+    }
+    if (frame.clearHistoryOnFinish) {
+      cube.clearMoveHistory();
+    }
+    if (frame.activeFaceTurn) {
+      if (activeTurnId !== frame.activeFaceTurn.turnId) {
+        activeTurnId = frame.activeFaceTurn.turnId;
+        cube.beginMove(frame.activeFaceTurn.move);
+      }
+      cube.setActiveMoveProgress(frame.activeFaceTurn.easedProgress);
+      if (getMoveSpec(frame.activeFaceTurn.move).isHalfTurn) {
+        maxHalfTurnWristRoll = Math.max(
+          maxHalfTurnWristRoll,
+          Math.abs(frame.leftAngles.wristRoll),
+          Math.abs(frame.rightAngles.wristRoll),
+        );
+      }
+    }
+
+    leftArm.applyJointAngles(frame.leftAngles);
+    rightArm.applyJointAngles(frame.rightAngles);
+    cube.position.set(frame.cubePosition.x, frame.cubePosition.y, frame.cubePosition.z);
+    cube.rotation.set(frame.cubePitch, frame.cubeYaw, 0);
+    cube.scale.setScalar(frame.cubeScale);
+
+    leftArm.updateMatrixWorld(true);
+    rightArm.updateMatrixWorld(true);
+    cube.updateMatrixWorld(true);
+
+    const leftOBBs = leftTracked.map((t) => ({t, obb: buildWorldOBB(t)}));
+    const rightOBBs = rightTracked.map((t) => ({t, obb: buildWorldOBB(t)}));
+    const contextTag = `${frame.snapshot.state} (${frame.snapshot.statusLabel})`;
+
+    for (const group of [leftOBBs, rightOBBs]) {
+      for (const {t, obb} of group) {
+        if (!t.checkTabletop) continue;
+        const minY = obbMinY(obb);
+        if (minY < lowestArmY) {
+          lowestArmY = minY;
+          lowestArmDetail = `${obb.label} at ${contextTag}`;
+        }
+      }
+    }
+
+    for (const l of leftOBBs) {
+      for (const r of rightOBBs) {
+        const overlap = obbOverlapDepth(l.obb, r.obb);
+        if (overlap > worstArmOverlap) {
+          worstArmOverlap = overlap;
+          worstArmDetail = `${l.obb.label} vs ${r.obb.label} (${(overlap * 1000).toFixed(2)}mm) at ${contextTag}`;
+        }
+      }
+    }
+
+    const cubieOBBs: OBB3[] = [];
+    for (const unit of cube.cubies) {
+      cubieCenter.addVectors(unit.localMin, unit.localMax).multiplyScalar(0.5);
+      cubieHalf.subVectors(unit.localMax, unit.localMin).multiplyScalar(0.5);
+      cubieOBBs.push(
+        buildBoxOBB(unit.group.name, unit.group.matrixWorld, cubieCenter, [
+          Math.max(0.001, cubieHalf.x - 0.0004),
+          Math.max(0.001, cubieHalf.y - 0.0004),
+          Math.max(0.001, cubieHalf.z - 0.0004),
+        ]),
+      );
+    }
+
+    for (const item of [...leftOBBs, ...rightOBBs]) {
+      for (const cOBB of cubieOBBs) {
+        const overlap = obbOverlapDepth(item.obb, cOBB);
+        if (overlap > worstCubeOverlap) {
+          worstCubeOverlap = overlap;
+          worstCubeDetail = `${item.obb.label} vs ${cOBB.label} (${(overlap * 1000).toFixed(2)}mm) at ${contextTag}`;
+        }
+      }
+    }
+  };
+
+  // 1. Verify Domino Cuboid bottom sits dead-flush on resting pad in STANDBY
+  const initFrame = choreo.evaluateFrame();
+  applyAndAudit(initFrame);
+  const initBounds = cube.getBoundsSnapshot();
+  const bottomWorldY = initFrame.cubePosition.y + initBounds.minY;
+  assert.ok(
+    Math.abs(bottomWorldY - (LAB_DIMENSIONS.TABLE_TOP_Y + LAB_DIMENSIONS.PAD_SURFACE_OFFSET)) < 1e-4,
+    `Domino Cuboid bottom should rest flush on pad, got ${bottomWorldY.toFixed(5)}`,
+  );
+
+  // 2. Pick Up + 16-move Domino Scramble (all 8 legal moves x2)
+  assert.equal(choreo.triggerScramble(dominoScramble), true);
+  let steps = 0;
+  while (choreo.getState() !== 'HOLDING' && steps < 9000) {
+    applyAndAudit(choreo.step(0.015));
+    steps += 1;
+  }
+  assert.equal(choreo.getState(), 'HOLDING');
+  assert.equal(cube.isSolved(), false);
+  assert.ok(
+    maxHalfTurnWristRoll > Math.PI - 0.15,
+    `Expected continuous 180-degree wrist roll during Domino half-turns, max=${maxHalfTurnWristRoll.toFixed(3)} rad`,
+  );
+
+  // 3. Auto-Solve Domino Cuboid completely back to solved brick + Celebration!
+  assert.equal(choreo.triggerAutoSolve(cube.getMoveHistory()), true);
+  steps = 0;
+  while (steps < 9000) {
+    const f = choreo.step(0.015);
+    applyAndAudit(f);
+    steps += 1;
+    if (f.snapshot.state === 'HOLDING' && f.snapshot.isSolvedBadge) break;
+  }
+  assert.equal(choreo.getState(), 'HOLDING');
+  assert.equal(choreo.getSnapshot().statusLabel, 'HOLDING — SOLVED ✓ • 3x3x2');
+  assert.equal(cube.isSolved(), true, 'Domino Cuboid must be 100% solved after robotic Auto-Solve');
+
+  // 4. Put Down solved Domino Cuboid cleanly onto resting pad
+  assert.equal(choreo.triggerPrimaryAction(), true);
+  steps = 0;
+  while (choreo.getState() !== 'STANDBY' && steps < 1500) {
+    applyAndAudit(choreo.step(0.015));
+    steps += 1;
+  }
+  assert.equal(choreo.getState(), 'STANDBY');
+
+  assert.ok(framesChecked > 3500, `Expected dense Domino audit, checked ${framesChecked} frames`);
+  assert.equal(
+    worstArmOverlap,
+    0,
+    `Domino Cuboid arm-to-arm 3D mesh overlap: ${worstArmDetail}`,
+  );
+  assert.equal(
+    worstCubeOverlap,
+    0,
+    `Domino Cuboid arm-to-cubie 3D mesh clipping: ${worstCubeDetail}`,
+  );
+  assert.ok(
+    lowestArmY > LAB_DIMENSIONS.TABLE_TOP_Y + 0.03,
+    `Domino Cuboid arm dipped too close to tabletop: minY=${lowestArmY.toFixed(4)}m (${lowestArmDetail})`,
+  );
+
+  cube.dispose();
+  leftArm.dispose();
+  rightArm.dispose();
+  materials.dispose();
+});
+
 
 
 

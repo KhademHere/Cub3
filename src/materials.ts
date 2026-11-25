@@ -25,6 +25,11 @@ export interface LabMaterialLibrary {
     yAxis: THREE.MeshPhysicalMaterial;
     zAxis: THREE.MeshPhysicalMaterial;
   };
+  dominoCubeCore: THREE.MeshStandardMaterial;
+  dominoCubeTiles: Record<
+    'white' | 'yellow' | 'red' | 'orange' | 'blue' | 'green',
+    THREE.MeshPhysicalMaterial
+  >;
   dispose: () => void;
 }
 
@@ -475,6 +480,32 @@ export function createLabMaterials(maxAnisotropy: number): LabMaterialLibrary {
     zAxis: makeMirrorTileMaterial(0xdbe3ee, Math.PI / 4, 0.19),
   };
 
+  // High-contrast 3x3x2 Domino-Lab palette: matte obsidian core with glossy Ivory White top,
+  // Amber Yellow bottom, and crisp color-coded side bands around the 2-layer perimeter.
+  const dominoCubeCore = new THREE.MeshStandardMaterial({
+    color: 0x0a0d12,
+    roughness: 0.48,
+    metalness: 0.12,
+  });
+
+  const makeDominoTileMaterial = (hex: number) =>
+    new THREE.MeshPhysicalMaterial({
+      color: hex,
+      roughness: 0.13,
+      metalness: 0.03,
+      clearcoat: 0.96,
+      clearcoatRoughness: 0.08,
+    });
+
+  const dominoCubeTiles = {
+    white: makeDominoTileMaterial(0xf8f6f0),
+    yellow: makeDominoTileMaterial(0xf5b301),
+    red: makeDominoTileMaterial(0xdc2626),
+    orange: makeDominoTileMaterial(0xf97316),
+    blue: makeDominoTileMaterial(0x2563eb),
+    green: makeDominoTileMaterial(0x10b981),
+  };
+
   const allMaterials: THREE.Material[] = [
     tableTop,
     tableEdge,
@@ -493,6 +524,8 @@ export function createLabMaterials(maxAnisotropy: number): LabMaterialLibrary {
     ...Object.values(cubeTiles),
     mirrorCubeCore,
     ...Object.values(mirrorCubeTiles),
+    dominoCubeCore,
+    ...Object.values(dominoCubeTiles),
   ];
   const allTextures: THREE.Texture[] = [
     gridMap,
@@ -521,6 +554,8 @@ export function createLabMaterials(maxAnisotropy: number): LabMaterialLibrary {
     cubeTiles,
     mirrorCubeCore,
     mirrorCubeTiles,
+    dominoCubeCore,
+    dominoCubeTiles,
     dispose() {
       for (const mat of allMaterials) mat.dispose();
       for (const tex of allTextures) tex.dispose();
